@@ -27,6 +27,8 @@ Refer to `using-loom-cli` for general CLI operation syntax.
 
 ## 2. Common Operations
 
+N.B. loom accepts URIs not file paths.
+
 ### Creating a Feature
 ```bash
 loom create feature://my-feature.md "title=My Feature" "status=draft" "priority=medium" "area=daemon"
