@@ -1,0 +1,13 @@
+# .sandbox/skills — one regex per line, matched against whole skill names.
+
+# GitHub: CLI patterns, issue/PR search and management, upstream fixes.
+gh
+.*-github-project-.*
+
+# Skill authoring.
+create-new-skill
+skill-creator
+find-skills
+
+# loom document-graph workflow.
+.*loom.*

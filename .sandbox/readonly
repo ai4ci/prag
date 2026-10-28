@@ -1,0 +1,10 @@
+# .sandbox/readonly — project-relative paths kept read-only.
+# npm/pnpm/yarn lockfiles are already protected by the baseline.
+
+bun.lock
+bun.lockb
+
+
+$HOME/Git/loom-cli
+$HOME/.local/bin/loom
+$HOME/.bun

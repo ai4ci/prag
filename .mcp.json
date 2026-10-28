@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "vscode-mcp-server": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote@next",
+        "http://localhost:3400/mcp",
+        "--header",
+        "Authorization:Bearer Sd68lONDS10GaEvOIi1GYFuJbBQ3e3"
+      ],
+      "directTools": true
+    }
+  }
+}

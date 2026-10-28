@@ -1,0 +1,8 @@
+# .sandbox/readwrite — $HOME directories bound read-write for this project.
+
+# npm/npx cache: keeps installs and npx-launched MCP bridges from
+# re-downloading every session.
+$HOME/.npm
+
+# ONNX/transformers.js model downloads for the embedding pipeline.
+$HOME/.cache/huggingface
