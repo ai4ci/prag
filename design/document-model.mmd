@@ -1,0 +1,88 @@
+%% @path feature design/features
+%% @path task design/tasks
+%% @path issue design/issues
+%% @path adr design/adrs
+%% @path src /packages
+%% @path resource design/resources
+
+classDiagram
+    %% Core lifecycle status for features from conception to completion
+    class FeatureStatus {
+        <<enumeration>>
+        draft
+        accepted
+        in_progress
+        completed
+    }
+
+    %% Triage priority for features, tasks, and issues
+    class Priority {
+        <<enumeration>>
+        low
+        medium
+        high
+    }
+
+    %% Execution state for engineering work items
+    class TaskStatus {
+        <<enumeration>>
+        todo
+        in_progress
+        done
+        blocked
+    }
+
+    %% Problem/bug report state
+    class IssueStatus {
+        <<enumeration>>
+        open
+        in_progress
+        resolved
+        closed
+    }
+
+    %% Decision record state
+    class AdrStatus {
+        <<enumeration>>
+        proposed
+        accepted
+        superseded
+    }
+
+    %% feature: Functional or architectural capability of prag (spec, requirements, and interfaces)
+    class feature {
+        +string title
+        +FeatureStatus status
+        +Priority priority
+        +string area
+    }
+
+    %% task: Actionable engineering task representing concrete work to be implemented
+    class task {
+        +string title
+        +TaskStatus status
+        +Priority priority
+    }
+
+    %% issue: Defects, bugs, unexpected behaviors, or runtime regressions discovered in the system
+    class issue {
+        +string title
+        +IssueStatus status
+        +Priority priority
+    }
+
+    %% adr: Architectural Decision Record capturing context, options evaluated, and binding design decisions
+    class adr {
+        +string title
+        +AdrStatus status
+        +date decided
+    }
+
+    feature "0..*" --> "0..*" adr : guided-by
+    feature "0..*" --> "0..*" src : implemented-by
+    task "0..*" --> "0..1" feature : relates-to
+    task "0..*" --> "0..*" task : blocks
+    task "0..*" --> "0..*" src : addressed-by
+    issue "0..*" --> "0..1" feature : relates-to
+    issue "0..*" --> "0..*" task : blocks
+    adr "0..*" --> "0..*" adr : supersedes
