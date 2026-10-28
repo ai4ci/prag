@@ -7,6 +7,7 @@ priority: medium
 area: ingestion
 guided-by:
   - adr://ADR-008.md
+  - adr://ADR-012.md
 ---
 ## Overview
 Support indexing of non-local content such as online library documentation, API references, and web pages directly via URI, with automated re-crawling driven by TTL freshness leases (`validUntil`).
@@ -15,10 +16,11 @@ Support indexing of non-local content such as online library documentation, API 
 Web resources integrate natively into the 4-table LanceDB CAS schema:
 - **`branch_mapping`:** Uses the canonical `$default` branch sentinel with `projectId = 'web'` (or designated custom project slug). `uri` stores the canonical web URL (e.g. `https://docs.lancedb.com/javascript`).
 - **`file_mapping`:** Holds the extracted clean Markdown text of the page.
-  - `validUntil = now() + ttl` (e.g. 7 days, configurable per source).
+  - `validUntil = now() + ttl` (default: 1 day, per `defaults.webCooldownSeconds` in `~/.config/prag/config.json`; configurable per source up to multi-day TTLs for slow-changing docs).
   - When `validUntil` is `null`, the page is treated as permanent static documentation (never re-crawled).
 - **`chunk_mapping` & `chunks_pool`:** Stores structural markdown chunks and vector embeddings with full deduplication.
 
 ## Ingestion Pipeline
-- **Crawler:** Integration with Firecrawl or lightweight headless fetcher to extract clean Markdown from HTML.
+- **Crawler:** Integration with Firecrawl (self-hosted instance by default, see ADR-012; the hosted firecrawl.dev API is an optional convenience) or a lightweight headless fetcher to extract clean Markdown from HTML.
 - **Scheduled Refresh:** A periodic background scheduler checks for web entries where `validUntil IS NOT NULL AND validUntil <= now()`, fetching updated versions only when content has changed.
+- **Opt-in only:** No web fetch ever occurs for a URI unless the user has explicitly registered it via `prag watch <https-uri>`; this is the sole source of outbound network calls in the system (ADR-012).

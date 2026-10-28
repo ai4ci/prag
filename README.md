@@ -48,7 +48,7 @@ prag/
 
 ### Phase 3: Consumer Interfaces
 - [ ] Build the short-lived CLI client with native git branch detection (`@prag/cli`).
-- [ ] Expose the standard input/output (`stdio`) Model Context Protocol (MCP) server tool framework.
+- [ ] Expose the native HTTP/SSE Model Context Protocol (MCP) server endpoint at `/mcp` directly inside `@prag/daemon` (see ADR-011).
 
 ---
 
@@ -56,14 +56,20 @@ prag/
 
 ### Starting the Background Service
 ```bash
-# Spin up the persistent file watcher and local model inference queue
-node packages/daemon/dist/index.js --watch ~/projects/my-app
+# The daemon lazily auto-spawns on first CLI/MCP use; to start it explicitly:
+prag daemon start
+
+# Then grant it a workspace to watch and index:
+prag watch file:///home/user/projects/my-app
 ```
 
 ### Searching from the CLI
 ```bash
-# The binary auto-detects your active git branch context and queries instantly
-prag search "statistical variance check for matrices" --limit 3
+# The binary auto-detects your active git branch and project context and queries instantly
+prag search-local "statistical variance check for matrices" --limit 3
+
+# Or search across every registered project:
+prag search-all "statistical variance check for matrices" --limit 3
 ```
 
 ### Connecting to an MCP Client (e.g., `claude_desktop_config.json`)
@@ -71,12 +77,12 @@ prag search "statistical variance check for matrices" --limit 3
 {
   "mcpServers": {
     "prag": {
-      "command": "node",
-      "args": ["/path/to/prag/packages/daemon/dist/mcp.js"]
+      "url": "http://127.0.0.1:7724/mcp"
     }
   }
 }
 ```
+No separate process to launch: the MCP server runs inside the already-running (or lazily auto-spawned) `@prag/daemon`.
 
 ---
 

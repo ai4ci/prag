@@ -27,7 +27,7 @@ erDiagram
         string name "Human-friendly label"
         boolean isGit "Whether the folder is a git repository"
         int defaultCooldownSeconds "Default validUntil delta: e.g. 60s for local, null for web"
-        string status "ready | indexing | error | paused"
+        string status "ready | indexing | idle | error | paused"
         datetime registeredAt "Initial registration timestamp"
         datetime lastSyncedAt "Last completed scan timestamp"
     }
@@ -122,7 +122,7 @@ Many-to-many relationship mapping immutable file versions to ordered chunk seque
 | Field Name | Data Type | Constraints / Attributes | Description |
 |---|---|---|---|
 | `fileVersionId` | `String` | Foreign Reference, Indexed | Points to matching signature within `file_mapping`. |
-| `chunkIndex` | `Integer` | Order index | Order of chunks in the file version (0-indexed). |
+| `chunkIndex` | `Integer` | Order index | Order of chunks in the file version (0-indexed). An oversized AST node sub-chunked per ADR-014 occupies several consecutive indices. |
 | `chunkHash` | `String` | Foreign Reference, Indexed | Points to matching signature within `chunks_pool`. |
 
 ### 6. `chunks_pool`

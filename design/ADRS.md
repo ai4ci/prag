@@ -20,4 +20,11 @@ view:
 - [Unified Allow/Deny URI Grants Rule Set and Database-Backed Project Discovery](adrs/ADR-009.md)
 - [AST-Based Whitespace Normalization for Chunk Hashing (Preserving Comments)](adrs/ADR-010.md)
 - [Native HTTP/SSE MCP Server Endpoint Built Directly into Background Daemon](adrs/ADR-011.md)
+- [Air-Gap Scope Clarification (Self-Hosted by Default, Not Zero-Network)](adrs/ADR-012.md)
+- [Shared-Secret Authentication for the Loopback HTTP/MCP Endpoint](adrs/ADR-013.md)
+- [Sliding-Window Sub-Chunking for Oversized AST Nodes](adrs/ADR-014.md)
+- [Pinned Embedding Model with Explicit Re-Embed Migration](adrs/ADR-015.md)
+- [Loud Daemon Identity and Version Mismatch, No Automatic Port Fallback](adrs/ADR-016.md)
+- [Manual Non-Eager Garbage Collection for chunks_pool via CLI and MCP](adrs/ADR-017.md)
+- [Split Search into search_local and search_all Across CLI and MCP](adrs/ADR-018.md)
 <!-- loom:links end -->

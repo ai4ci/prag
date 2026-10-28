@@ -15,4 +15,5 @@ Implement the 4th table in the LanceDB schema: `branch_mapping`.
 - Implement synchronization logic when a branch is checked out: copy file pointers to the new branch for all matching files.
 - Implement deletion of `branch_mapping` rows when a file is deleted on a branch.
 - Implement branch pruning command/routine: purge records from `branch_mapping` when a branch is deleted in Git.
-- Implement optional orphan cleanup query to purge `file_mapping` and `chunk_mapping` rows with no active branch reference.
+- Implement orphan cleanup query to purge `file_mapping` and `chunk_mapping` rows with no active branch reference. This runs by default on `prag prune` / `prune_index` (no flag needed).
+- Implement `chunks_pool` GC as a separate, explicitly opt-in step gated behind `--gc-chunks` (CLI) / `gcChunks: true` (MCP `prune_index`): delete rows with no `chunk_mapping` reference, then compact via `table.optimize()`. Never automatic, never reference-counted (ADR-017).

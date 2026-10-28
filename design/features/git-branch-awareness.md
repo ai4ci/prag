@@ -9,6 +9,7 @@ guided-by:
   - adr://ADR-002.md
   - adr://ADR-001.md
   - adr://ADR-004.md
+  - adr://ADR-017.md
 ---
 ## Overview
 The indexing workspace must map file metrics against the active Git working branch. When switching branches (`git checkout`), data modifications must be safely partitioned. Unchanged files shared across branches must be tracked efficiently to bypass computational overhead.
@@ -31,4 +32,5 @@ Governed by the 4-table Content-Addressable Storage (CAS) and branch-pointer mod
   ```sql
   DELETE FROM branch_mapping WHERE projectId = $projectId AND branch = $deletedBranch;
   ```
-- Unreferenced `file_mapping` and `chunk_mapping` records can be cleaned via periodic housekeeping queries. `chunks_pool` acts as an immutable, content-addressable cache.
+- Unreferenced `file_mapping` and `chunk_mapping` records are cleaned by default whenever `prag prune` / MCP `prune_index` runs (always a manual, explicit call -- never scheduled).
+- `chunks_pool` is never swept as part of that default pass: it acts as a permanent, content-addressable cache, and is only garbage-collected when `--gc-chunks` / `gcChunks: true` is explicitly passed, via either the CLI or the `prune_index` MCP tool (ADR-017).

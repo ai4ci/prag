@@ -7,12 +7,15 @@ priority: high
 area: core
 guided-by:
   - adr://ADR-006.md
+  - adr://ADR-012.md
 ---
 ## Overview
-100% air-gapped runtime with zero telemetry or remote API calls. All embeddings, parsing, and storage remain strictly inside the local workstation hardware perimeter.
+Self-hosted, local-first runtime with zero telemetry. By default (no web URIs registered) all embeddings, parsing, and storage remain strictly inside the local workstation hardware perimeter and zero outbound network calls occur. See ADR-012 for the precise scope of this guarantee relative to opt-in web ingestion.
 
 ## Requirements
-- Complete air-gap guarantee: no outbound network calls, analytics, telemetry wrappers, or external cloud LLM dependencies.
+- No telemetry, analytics, or usage reporting calls, ever, regardless of configuration.
+- Zero outbound network calls in the default configuration (no web URIs granted).
+- Outbound network calls occur only for URIs the user explicitly grants via `prag watch <https-uri>` (see `web-and-nonlocal-content.md`); no external cloud LLM dependency is required for core indexing/search.
 - Hardware-configurable acceleration providers:
   - GPU / CUDA / WebGPU for swift local inference when hardware is present.
   - Automatic graceful fallback to optimized CPU SIMD loops when dedicated acceleration is absent.

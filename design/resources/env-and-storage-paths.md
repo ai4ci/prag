@@ -27,6 +27,7 @@ Inside the resolved base paths, `prag` maintains the following structured files:
 ```text
 ~/.local/share/prag/
 ├── lancedb/
+│   ├── .embedding-model.json     # { model, dim, pinnedAt } -- model the index was built with (ADR-015)
 │   ├── grants.lance/             # Allow/deny URI grants table
 │   ├── projects.lance/           # Registered project workspaces & tracking modes
 │   ├── branch_mapping.lance/     # Branch heads pointing to file commit hashes
@@ -43,6 +44,7 @@ Inside the resolved base paths, `prag` maintains the following structured files:
 ~/.local/state/prag/
 ├── daemon.pid                    # Stores PID of currently running background daemon
 ├── daemon.port                   # Active loopback port number (e.g., 7724)
+├── daemon.token                  # Bearer token for HTTP/MCP auth, mode 0600 (ADR-013)
 └── daemon.sock                   # Optional local UNIX domain socket (if enabled)
 ```
 
@@ -95,7 +97,9 @@ If present at `~/.config/prag/config.json`, the daemon loads defaults from this 
   "embedding": {
     "model": "Xenova/bge-small-en-v1.5",
     "device": "cpu",
-    "batchSize": 64
+    "batchSize": 64,
+    "maxChunkTokens": 400,
+    "chunkOverlapTokens": 60
   },
   "storage": {
     "dataDir": null,

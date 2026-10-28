@@ -15,4 +15,4 @@ Implement hybrid search in @prag/daemon combining dense vector embeddings and BM
 - Implement hybrid search pipeline using LanceDB's native hybrid querying and Reciprocal Rank Fusion (RRF, k=60).
 - Support `mode: 'hybrid' | 'vector' | 'fts'` parameter in `SearchQueryOptions`.
 - Enforce branch and project filtering against `branch_mapping` and `file_mapping` before/during rank fusion.
-- Update CLI search and MCP tool options to expose hybrid search defaults.
+- Update CLI (`search-local`/`search-all`) and MCP tools (`search_local`/`search_all`) to expose hybrid search defaults consistently across the split commands (ADR-018).

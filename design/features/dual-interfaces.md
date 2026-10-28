@@ -10,9 +10,12 @@ guided-by:
   - adr://ADR-005.md
   - adr://ADR-007.md
   - adr://ADR-011.md
+  - adr://ADR-013.md
+  - adr://ADR-018.md
+  - adr://ADR-016.md
 ---
 ## Overview
-Stored data is queryable via a short-lived, low-latency Command Line Interface (CLI) (<15ms response time) and natively exposed as a Model Context Protocol (MCP) server directly inside the `@prag/daemon` process over HTTP/SSE (`http://127.0.0.1:7724/mcp`). Both interfaces share the daemon's warm in-memory ONNX embedding model and LanceDB connection, utilizing **Hybrid Search** (Dense Vector + BM25 Full-Text Search with Reciprocal Rank Fusion).
+Stored data is queryable via a short-lived, low-latency Command Line Interface (CLI) (<15ms response time) and natively exposed as a Model Context Protocol (MCP) server directly inside the `@prag/daemon` process over HTTP/SSE (`http://127.0.0.1:7724/mcp`). Both interfaces share the daemon's warm in-memory ONNX embedding model and LanceDB connection, utilizing **Hybrid Search** (Dense Vector + BM25 Full-Text Search with Reciprocal Rank Fusion). Search is exposed as two explicit commands/tools, not one optionally-scoped one: `search-local`/`search_local` (default, scoped to the caller's current project) and `search-all`/`search_all` (unscoped, cross-project) -- see ADR-018.
 
 ## Hybrid Search Engine Architecture
 Queries combine neural semantic search and exact keyword matching:
@@ -34,7 +37,7 @@ Queries combine neural semantic search and exact keyword matching:
 ```typescript
 export interface SearchQueryOptions {
   query: string;           // Natural language or keyword search query
-  activeBranch: string;    // Target branch context to enforce
+  activeBranch?: string;   // Target branch context to enforce; defaults to '$default' if omitted (the daemon does not auto-detect git branch itself -- the CLI resolves it from local .git/HEAD before calling /search)
   projectId?: string;      // Optional specific project filter
   limit?: number;          // Top-K results (default: 5)
   mode?: 'hybrid' | 'vector' | 'fts'; // Search mode (default: 'hybrid')
