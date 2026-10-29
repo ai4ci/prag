@@ -6,6 +6,8 @@ status: todo
 priority: high
 relates-to:
   - feature://test-harness-and-fixtures.md
+addressed-by:
+  - src://daemon/src/test-harness.ts
 ---
 ## Objective
 Keep `test/fixtures/` a complete and honest set of inputs: every documented ingestion behaviour has a fixture that exercises it, and every fixture's invariant is checked rather than assumed.

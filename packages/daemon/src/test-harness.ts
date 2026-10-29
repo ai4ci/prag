@@ -5,8 +5,9 @@
 // since no CLI entry point exists yet).
 
 import { mkdtempSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
+import { execFileSync } from "node:child_process";
 
 import { LanceDbSchema, FakeEmbeddingProvider } from "@prag/core";
 import { Daemon } from "./daemon.js";
@@ -21,6 +22,23 @@ export interface TestDaemonInstance {
 }
 
 /**
+ * Build git fixture repositories into a directory under root.
+ * Returns paths for each fixture repo.
+ */
+export function buildFixtures(root: string): { alpha: string; beta: string; plain: string } {
+  const builderPath = resolve(
+    import.meta.dirname!,
+    "..", "..", "..", "test", "fixtures", "build-git-fixtures.mjs",
+  );
+  const targetDir = join(root, "fixtures");
+  const stdout = execFileSync(process.execPath, [builderPath, targetDir], {
+    encoding: "utf-8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  return JSON.parse(stdout.trim()) as { alpha: string; beta: string; plain: string };
+}
+
+/**
  * Start a test daemon with full PRAG_ROOT isolation (ADR-019).
  * Each call gets its own temp root.
  * Safe to call concurrently.
@@ -30,8 +48,9 @@ export async function startTestDaemon(
     port?: number;
     token?: string;
     embeddingDim?: number;
+    withFixtures?: boolean;
   },
-): Promise<TestDaemonInstance> {
+): Promise<TestDaemonInstance & { fixtures?: { alpha: string; beta: string; plain: string } }> {
   const root = mkdtempSync(join(tmpdir(), "prag-harness-"));
   const token = overrides?.token ?? "test-token";
   const port = overrides?.port ?? 0; // 0 = OS-assigned
@@ -63,7 +82,12 @@ export async function startTestDaemon(
   const boundPort = daemon.boundPort ?? port;
   const baseUrl = `http://127.0.0.1:${boundPort}`;
 
-  return { baseUrl, port: boundPort, token, root, daemon, schema };
+  let fixtures: { alpha: string; beta: string; plain: string } | undefined;
+  if (overrides?.withFixtures) {
+    fixtures = buildFixtures(root);
+  }
+
+  return { baseUrl, port: boundPort, token, root, daemon, schema, fixtures };
 }
 
 /**
