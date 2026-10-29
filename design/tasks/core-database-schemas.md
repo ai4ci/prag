@@ -13,6 +13,8 @@ addressed-by:
   - src://core/src/schema.ts#SearchQueryOptions
   - src://core/src/schema.ts#GrantRow
   - src://core/src/schema.test.ts
+  - src://core/src/database.ts
+  - src://core/src/database.test.ts
 ---
 ## Objective
 Define the shared TypeScript database schemas, table models, and interfaces in `@prag/core` matching the 7-table storage specification.

@@ -29,3 +29,18 @@ export {
   type DatabaseConfig,
   type TableDefinition,
 } from "./database.js";
+
+export {
+  FakeEmbeddingProvider,
+  getProvider,
+  registerProvider,
+  parseFakeDim,
+  type EmbeddingProvider,
+  type EmbeddingSidecar,
+  type ProviderFactory,
+} from "./embedding.js";
+
+export {
+  OllamaEmbeddingProvider,
+  type OllamaConfig,
+} from "./ollama-provider.js";
