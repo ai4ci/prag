@@ -12,5 +12,8 @@
   "devDependencies": {
     "tsx": "^4.23.15",
     "typescript": "^7.0.2"
+  },
+  "dependencies": {
+    "@lancedb/lancedb": "^0.41.0"
   }
 }

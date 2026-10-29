@@ -14,3 +14,18 @@ export {
   type SearchHit,
   type GrantEvaluation,
 } from "./schema.js";
+
+export {
+  LanceDbSchema,
+  API_VERSION,
+  ALL_TABLES,
+  upsertGrants,
+  upsertProjects,
+  upsertBranchMapping,
+  upsertFileMapping,
+  upsertChunkMapping,
+  upsertChunksPool,
+  upsertVectorPool,
+  type DatabaseConfig,
+  type TableDefinition,
+} from "./database.js";
