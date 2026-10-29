@@ -9,6 +9,15 @@ guided-by:
   - adr://ADR-003.md
   - adr://ADR-010.md
   - adr://ADR-014.md
+implemented-by:
+  - src://core/src/chunker.ts#chunkFile
+  - src://core/src/chunker.ts#normalizeWhitespace
+  - src://core/src/chunker.ts#chunkHash
+  - src://core/src/chunker.ts#fallbackChunk
+  - src://core/src/chunker.ts#ScopeEntry
+  - src://core/src/chunker.ts#buildScopeMap
+  - src://core/src/chunker.ts#Chunk
+  - src://core/src/chunker.ts#ChunkedFile
 ---
 ## Overview
 Source code must be partitioned along structural semantic boundaries (e.g. classes, functions, methods) utilizing Tree-sitter grammar definitions to preserve contextual integrity. To insulate the retrieval index from cosmetic formatting changes (linters, Prettier, Black), chunk hashing uses structural whitespace normalization while retaining comments.

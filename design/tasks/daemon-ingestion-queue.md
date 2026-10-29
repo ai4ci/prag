@@ -6,6 +6,10 @@ status: todo
 priority: medium
 relates-to:
   - feature://background-worker-queue.md
+addressed-by:
+  - src://daemon/src/ingestion-queue.ts#IngestionQueue
+  - src://daemon/src/ingestion-queue.ts#IngestionConfig
+  - src://daemon/src/ingestion-queue.test.ts
 ---
 ## Objective
 Construct a thread-safe background ingestion worker queue in `@prag/daemon` with filesystem event debouncing.

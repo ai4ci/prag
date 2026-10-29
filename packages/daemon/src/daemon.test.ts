@@ -49,6 +49,11 @@ void describe("Daemon", () => {
     assert.equal(body.pid, process.pid);
     assert.equal(typeof body.uptime, "number");
     assert.equal(typeof body.port, "number");
+    // Path isolation fields (ADR-019)
+    assert.equal(body.root, null);
+    assert.equal(typeof body.dataDir, "string");
+    assert.equal(typeof body.configDir, "string");
+    assert.equal(typeof body.runDir, "string");
   });
 
   void it("GET /health works without auth", async () => {

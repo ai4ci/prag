@@ -1,22 +1,32 @@
 // @prag/daemon — Local HTTP daemon for prag
 //
 // Binds to 127.0.0.1, authenticates via PRAG_API_KEY, and exposes
-// endpoints: GET /health, POST /search, GET /projects, POST /shutdown,
-// and GET/POST /mcp for the MCP SSE interface.
+// endpoints: GET /health, POST /search, GET /projects, POST /projects,
+// POST /sync, POST /shutdown, and GET/POST /mcp for the MCP SSE interface.
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { readFileSync, existsSync } from "node:fs";
-import { homedir } from "node:os";
+import { statSync } from "node:fs";
 import { join } from "node:path";
 
 import {
   type LanceDbSchema,
   type EmbeddingProvider,
   type SearchResult,
+  resolvePragPaths,
+  loadPragConfig,
+  type PragPaths,
   hybridSearch,
+  upsertProjects,
+  upsertFileMapping,
+  upsertChunkMapping,
+  upsertChunksPool,
+  upsertVectorPool,
 } from "@prag/core";
 
 import { McpHandler } from "./mcp-server.js";
+import { WorkerPool } from "./worker-pool.js";
+import { IngestionQueue } from "./ingestion-queue.js";
+import { type ProcessResult } from "./worker-pool.js";
 
 // ── Config ────────────────────────────────────────────────────────────
 
@@ -26,26 +36,22 @@ const API_VERSION = 1;
 export interface DaemonConfig {
   port?: number;
   token?: string;
-  dataDir?: string;
+  paths?: PragPaths;
+  ingestion?: {
+    cooldownMs?: number;
+    maxFileBytes?: number;
+    poolSize?: number;
+  };
 }
 
 export function loadConfig(): DaemonConfig {
-  const configPath = join(homedir(), ".config", "prag", "config.json");
-  let config: DaemonConfig = {};
-  if (existsSync(configPath)) {
-    try {
-      const raw = readFileSync(configPath, "utf-8");
-      config = JSON.parse(raw) as DaemonConfig;
-    } catch {
-      // ignore malformed config, use defaults
-    }
-  }
+  const paths = resolvePragPaths();
+  const config = loadPragConfig(paths.configDir);
 
-  // PRAG_API_KEY env var takes precedence
-  config.token = process.env.PRAG_API_KEY ?? config.token ?? "guest";
-  config.port = config.port ?? DEFAULT_PORT;
-  config.dataDir = config.dataDir ?? join(homedir(), ".local", "share", "prag");
-  return config;
+  const port = Number(process.env.PRAG_PORT) || config.server?.port || DEFAULT_PORT;
+  const token = process.env.PRAG_API_KEY ?? "guest";
+
+  return { port, token, paths };
 }
 
 // ── Daemon ────────────────────────────────────────────────────────────
@@ -56,12 +62,17 @@ export class Daemon {
   private db: LanceDbSchema | null = null;
   private embedder: EmbeddingProvider | null = null;
   private mcpHandler: McpHandler | null = null;
+  private ingestionQueue: IngestionQueue | null = null;
+  private workerPool: WorkerPool | null = null;
   private token: string;
+  readonly paths: PragPaths;
+  private _boundPort: number | null = null;
 
   constructor(
     readonly config: DaemonConfig,
   ) {
     this.token = config.token ?? "guest";
+    this.paths = config.paths ?? resolvePragPaths();
   }
 
   /** Start the HTTP server. */
@@ -72,11 +83,30 @@ export class Daemon {
     this.db = db;
     this.embedder = embedder;
     this.mcpHandler = new McpHandler(db, embedder);
+
+    // Start ingestion pipeline if configured
+    const ingConfig = this.config.ingestion;
+    if (ingConfig?.poolSize !== undefined && ingConfig.poolSize > 0) {
+      this.workerPool = new WorkerPool(ingConfig.poolSize);
+      this.ingestionQueue = new IngestionQueue(
+        this.workerPool,
+        (result) => this._onFileProcessed(result).catch(() => {}),
+        {
+          cooldownMs: ingConfig.cooldownMs,
+          maxFileBytes: ingConfig.maxFileBytes,
+        },
+      );
+    }
+
     this.startTime = Date.now();
 
     return new Promise((resolve) => {
       this.server = createServer((req, res) => this._handle(req, res));
       this.server.listen(this.config.port, "127.0.0.1", () => {
+        const addr = this.server!.address();
+        if (addr && typeof addr === "object") {
+          this._boundPort = addr.port;
+        }
         resolve();
       });
     });
@@ -84,10 +114,16 @@ export class Daemon {
 
   /** Graceful shutdown. */
   async stop(): Promise<void> {
+    if (this.ingestionQueue) {
+      await this.ingestionQueue.close();
+    }
+    if (this.workerPool) {
+      await this.workerPool.close();
+    }
+    if (this.mcpHandler) {
+      await this.mcpHandler.close();
+    }
     return new Promise((resolve) => {
-      if (this.mcpHandler) {
-        this.mcpHandler.close().catch(() => {});
-      }
       if (this.server) {
         this.server.close(() => resolve());
       } else {
@@ -96,14 +132,113 @@ export class Daemon {
     });
   }
 
+  get boundPort(): number | null {
+    return this._boundPort;
+  }
+
   get listening(): boolean {
     return this.server?.listening ?? false;
+  }
+
+  /** Register a project directory for file watching. */
+  registerProject(projectId: string, dirPath: string): void {
+    if (!this.ingestionQueue) {
+      throw new Error("Ingestion not enabled (set ingestion.poolSize > 0)");
+    }
+    this.ingestionQueue.registerProject(projectId, dirPath);
+  }
+
+  private async _onFileProcessed(result: ProcessResult): Promise<void> {
+    if (!this.db || !this.embedder) return;
+
+    if (result.error) {
+      console.error("[prag] Ingestion error for", result.filePath, ":", result.error);
+      return;
+    }
+
+    // Unlink: remove from file_mapping
+    if (result.chunks.length === 0 && result.language === "") {
+      await this._handleUnlink(result.filePath);
+      return;
+    }
+
+    // Add/change: embed + upsert
+    await this._ingestFile(result);
+  }
+
+  private async _handleUnlink(filePath: string): Promise<void> {
+    if (!this.db) return;
+
+    const fmTable = this.db.table("file_mapping");
+    const escaped = filePath.replace(/'/g, "''");
+    const existing = await fmTable.query()
+      .filter(`uri = '${escaped}'`)
+      .limit(1)
+      .toArray() as Array<{ fileVersionId: string }>;
+
+    if (existing.length === 0) return;
+    const fileVersionId = existing[0].fileVersionId;
+
+    // Delete chunk_mapping entries
+    const cmTable = this.db.table("chunk_mapping");
+    const chunkMaps = await cmTable.query()
+      .filter(`fileVersionId = '${fileVersionId}'`)
+      .limit(10000)
+      .toArray() as Array<{ chunkHash: string }>;
+
+    for (const cm of chunkMaps) {
+      await this.db.table("chunks_pool").delete(`chunkHash = '${cm.chunkHash}'`);
+      await this.db.table("vector_pool").delete(`chunkHash = '${cm.chunkHash}'`);
+    }
+
+    await this.db.table("chunk_mapping").delete(`fileVersionId = '${fileVersionId}'`);
+    await this.db.table("file_mapping").delete(`fileVersionId = '${fileVersionId}'`);
+  }
+
+  private async _ingestFile(result: ProcessResult): Promise<void> {
+    if (!this.db || !this.embedder) return;
+
+    const texts = result.chunks.map((c) => c.text);
+    const embeddings = await this.embedder.embedBatch(texts);
+
+    // Upsert file_mapping
+    const fileVersionId = crypto.randomUUID();
+    const fmRow = {
+      fileVersionId,
+      projectId: result.projectId,
+      uri: result.filePath,
+      validUntil: null as Date | null,
+      contentHash: "",
+      language: result.language,
+    };
+    await upsertFileMapping(this.db.table("file_mapping"), [fmRow]);
+
+    // Build rows for each table
+    const cmRows: Array<{ fileVersionId: string; chunkIndex: number; chunkHash: string }> = [];
+    const cpRows: Array<{ chunkHash: string; text: string; scopeContext: string | null }> = [];
+    const vpRows: Array<{ chunkHash: string; unitIndex: number; vector: Float32Array }> = [];
+
+    for (let i = 0; i < result.chunks.length; i++) {
+      const c = result.chunks[i];
+      const vec = embeddings[i] ?? embeddings[embeddings.length - 1];
+
+      cmRows.push({ chunkHash: c.chunkHash, fileVersionId, chunkIndex: i });
+      cpRows.push({
+        chunkHash: c.chunkHash,
+        text: c.text,
+        scopeContext: c.scopeContext || null,
+      });
+      vpRows.push({ chunkHash: c.chunkHash, unitIndex: 0, vector: vec });
+    }
+
+    await upsertChunkMapping(this.db.table("chunk_mapping"), cmRows);
+    await upsertChunksPool(this.db.table("chunks_pool"), cpRows);
+    await upsertVectorPool(this.db.table("vector_pool"), vpRows);
   }
 
   // ── Request handling ──────────────────────────────────────────────
 
   private _handle(req: IncomingMessage, res: ServerResponse): void {
-    // Strict loopback check
     const addr = req.socket.remoteAddress;
     if (addr !== "127.0.0.1" && addr !== "::1" && addr !== "::ffff:127.0.0.1") {
       res.writeHead(403);
@@ -111,7 +246,6 @@ export class Daemon {
       return;
     }
 
-    // Reject non-localhost Origin
     const origin = req.headers["origin"];
     if (origin && !/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(origin)) {
       res.writeHead(403);
@@ -119,8 +253,8 @@ export class Daemon {
       return;
     }
 
-    // Auth (except GET /health)
     const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+
     if (url.pathname !== "/health" && req.method !== "OPTIONS") {
       const auth = req.headers["authorization"];
       if (!auth || !auth.startsWith("Bearer ") || auth.slice(7) !== this.token) {
@@ -130,24 +264,35 @@ export class Daemon {
       }
     }
 
-    // Route
-    switch (url.pathname) {
-      case "/health":
-        return this._handleHealth(req, res);
-      case "/search":
-        return this._handleSearch(req, res);
-      case "/projects":
-        return this._handleProjects(req, res);
-      case "/shutdown":
-        return this._handleShutdown(req, res);
-      case "/mcp":
-        return this.mcpHandler
-          ? this.mcpHandler.handle(req, res, url)
-          : (res.writeHead(503), void res.end("Service not initialized\n"));
-      default:
-        res.writeHead(404);
-        res.end("Not found\n");
+    if (url.pathname === "/mcp") {
+      if (this.mcpHandler) {
+        return this.mcpHandler.handle(req, res, url);
+      }
+      res.writeHead(503);
+      res.end("Service not initialized\n");
+      return;
     }
+
+    if (req.method === "GET") {
+      if (url.pathname === "/health") return this._handleHealth(req, res);
+      if (url.pathname === "/projects") return this._handleGetProjects(req, res);
+      res.writeHead(404);
+      res.end("Not found\n");
+      return;
+    }
+
+    if (req.method === "POST") {
+      if (url.pathname === "/search") return this._handleSearch(req, res);
+      if (url.pathname === "/projects") return this._handlePostProjects(req, res);
+      if (url.pathname === "/sync") return this._handleSync(req, res);
+      if (url.pathname === "/shutdown") return this._handleShutdown(req, res);
+      res.writeHead(404);
+      res.end("Not found\n");
+      return;
+    }
+
+    res.writeHead(405);
+    res.end("Method not allowed\n");
   }
 
   private async _handleHealth(_req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -160,11 +305,14 @@ export class Daemon {
       version: "0.1.0",
       uptime: Math.floor((Date.now() - this.startTime) / 1000),
       port: this.config.port,
+      root: this.paths.root || null,
+      dataDir: this.paths.dataDir,
+      configDir: this.paths.configDir,
+      runDir: this.paths.runDir,
     }));
   }
 
   private async _handleSearch(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    // Read body
     const body = await readBody(req);
     let queryOpts: Record<string, unknown>;
     try {
@@ -209,7 +357,7 @@ export class Daemon {
     }
   }
 
-  private async _handleProjects(_req: IncomingMessage, res: ServerResponse): Promise<void> {
+  private async _handleGetProjects(_req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (!this.db) {
       res.writeHead(503);
       res.end("Service not initialized\n");
@@ -231,10 +379,81 @@ export class Daemon {
     }
   }
 
+  private async _handlePostProjects(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const body = await readBody(req);
+    let projectOpts: Record<string, unknown>;
+    try {
+      projectOpts = JSON.parse(body);
+    } catch {
+      res.writeHead(400);
+      res.end("Bad request: invalid JSON\n");
+      return;
+    }
+
+    const projectId = projectOpts.projectId as string | undefined;
+    const rootUri = projectOpts.rootUri as string | undefined;
+
+    if (!projectId || !rootUri) {
+      res.writeHead(400);
+      res.end("Bad request: 'projectId' and 'rootUri' required\n");
+      return;
+    }
+
+    try {
+      statSync(rootUri);
+    } catch {
+      res.writeHead(400);
+      res.end(`Bad request: directory '${rootUri}' does not exist\n`);
+      return;
+    }
+
+    // Upsert project in DB
+    if (this.db) {
+      await upsertProjects(this.db.table("projects"), [{
+        projectId,
+        rootUri,
+        name: projectId,
+        isGit: false,
+        defaultCooldownSeconds: 60,
+        status: "active",
+        registeredAt: new Date(),
+        lastSyncedAt: null,
+      }]);
+    }
+
+    // Register watcher
+    try {
+      this.registerProject(projectId, rootUri);
+    } catch (err) {
+      res.writeHead(500);
+      res.end((err as Error).message + "\n");
+      return;
+    }
+
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ projectId, rootUri, status: "active" }));
+  }
+
+  private async _handleSync(_req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (!this.ingestionQueue) {
+      res.writeHead(200);
+      res.end(JSON.stringify({ ok: true, message: "ingestion not enabled" }));
+      return;
+    }
+
+    try {
+      await this.ingestionQueue.flushAll();
+      res.writeHead(200);
+      res.end(JSON.stringify({ ok: true }));
+    } catch (err) {
+      res.writeHead(500);
+      res.end(`Internal error: ${(err as Error).message}\n`);
+    }
+  }
+
   private _handleShutdown(_req: IncomingMessage, res: ServerResponse): void {
     res.writeHead(200);
     res.end("Shutting down\n");
-    // Schedule shutdown after response is sent
     setTimeout(() => {
       this.stop().then(() => process.exit(0)).catch(() => process.exit(1));
     }, 100);

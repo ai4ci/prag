@@ -9,6 +9,18 @@ relates-to:
 blocks:
   - task://daemon-ingestion-queue.md
   - task://cli-read-only-search.md
+addressed-by:
+  - src://core/src/database.ts#LanceDbSchema
+  - src://core/src/database.ts#DatabaseConfig
+  - src://core/src/database.ts#TableDefinition
+  - src://core/src/database.ts#vectorPoolDef
+  - src://core/src/database.ts#upsertGrants
+  - src://core/src/database.ts#upsertProjects
+  - src://core/src/database.ts#upsertBranchMapping
+  - src://core/src/database.ts#upsertFileMapping
+  - src://core/src/database.ts#upsertChunkMapping
+  - src://core/src/database.ts#upsertChunksPool
+  - src://core/src/database.ts#upsertVectorPool
 ---
 ## Objective
 Implement initialization scripts and table bootstrap utilities for LanceDB in `@prag/core`.

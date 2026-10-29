@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@kreuzberg/tree-sitter-language-pack": "^1.10.9",
-    "@lancedb/lancedb": "^0.41.0"
+    "@lancedb/lancedb": "^0.41.0",
+    "chokidar": "^6.0.0"
   }
 }

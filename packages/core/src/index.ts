@@ -61,3 +61,10 @@ export {
   type ChunkedFile,
 } from "./chunker.js";
 
+export {
+  resolvePragPaths,
+  loadPragConfig,
+  type PragPaths,
+  type PragConfig,
+} from "./paths.js";
+
