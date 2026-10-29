@@ -44,3 +44,13 @@ export {
   OllamaEmbeddingProvider,
   type OllamaConfig,
 } from "./ollama-provider.js";
+
+export {
+  chunkFile,
+  chunkHash,
+  normalizeWhitespace,
+  detectLanguageFromPath,
+  type Chunk,
+  type ChunkedFile,
+} from "./chunker.js";
+
