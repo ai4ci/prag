@@ -10,6 +10,8 @@ guided-by:
   - adr://ADR-001.md
   - adr://ADR-004.md
   - adr://ADR-017.md
+implemented-by:
+  - src://core/src/schema.ts#evaluateUriGrants
 ---
 ## Overview
 The indexing workspace must map file metrics against the active Git working branch. When switching branches (`git checkout`), data modifications must be safely partitioned. Unchanged files shared across branches must be tracked efficiently to bypass computational overhead.

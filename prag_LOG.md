@@ -1,0 +1,44 @@
+# Session log
+
+- `2026-10-29T11:13:57.937Z` **edit_file_code** — design/resources/env-and-storage-paths.md
+- `2026-10-29T11:14:03.055Z` **edit_file_code** — design/resources/env-and-storage-paths.md
+- `2026-10-29T11:14:09.331Z` **read_file_code** — design/adrs/ADR-013.md
+- `2026-10-29T11:14:11.443Z` **read_file_code** — design/adrs/ADR-013.md
+- `2026-10-29T11:14:28.452Z` **edit_file_code** — design/adrs/ADR-013.md
+- `2026-10-29T11:14:37.486Z` **edit_file_code** — design/adrs/ADR-013.md
+- `2026-10-29T11:14:45.521Z` **edit_file_code** — design/resources/cli-and-mcp-interface.md
+- `2026-10-29T11:14:52.316Z` **edit_file_code** — design/resources/cli-and-mcp-interface.md
+- `2026-10-29T11:14:56.482Z` **edit_file_code** — design/resources/cli-and-mcp-interface.md
+- `2026-10-29T11:15:00.087Z` **read_file_code** — design/resources/cli-and-mcp-interface.md
+- `2026-10-29T11:15:04.800Z` **edit_file_code** — design/resources/cli-and-mcp-interface.md
+- `2026-10-29T11:15:08.408Z` **read_file_code** — design/resources/cli-and-mcp-interface.md
+- `2026-10-29T11:15:24.415Z` **search_workspace_code** — .
+- `2026-10-29T11:15:31.042Z` **edit_file_code** — design/resources/cli-and-mcp-interface.md
+- `2026-10-29T11:15:45.287Z` **search_workspace_code** — .
+- `2026-10-29T11:15:50.080Z` **search_workspace_code** — .
+- `2026-10-29T11:16:06.183Z` **search_workspace_code** — .
+- `2026-10-29T11:16:41.672Z` **search_workspace_code** — .
+- `2026-10-29T11:16:45.104Z` **read_file_code** — design/features/test-harness-and-fixtures.md
+- `2026-10-29T11:16:50.518Z` **edit_file_code** — design/features/test-harness-and-fixtures.md
+- `2026-10-29T11:16:53.521Z` **edit_file_code** — design/tasks/cli-read-only-search.md
+- `2026-10-29T11:16:57.026Z` **edit_file_code** — design/tasks/daemon-http-server-and-lifecycle.md
+- `2026-10-29T11:17:01.277Z` **edit_file_code** — design/tasks/daemon-http-server-and-lifecycle.md
+- `2026-10-29T11:17:05.936Z` **edit_file_code** — design/tasks/test-environment-isolation.md
+- `2026-10-29T11:17:09.855Z` **edit_file_code** — design/tasks/test-harness-lifecycle.md
+- `2026-10-29T11:17:15.872Z` **read_file_code** — design/features/web-and-nonlocal-content.md
+- `2026-10-29T11:17:17.953Z` **read_file_code** — design/features/web-and-nonlocal-content.md
+- `2026-10-29T11:17:34.717Z` **edit_file_code** — design/features/web-and-nonlocal-content.md
+- `2026-10-29T11:18:11.113Z` **search_workspace_code** — .
+- `2026-10-29T11:27:30.726Z` **read_file_code** — /home/vp22681/Git/prag/.agents/skills/prag-methodology/SKILL.md
+- `2026-10-29T11:27:44.471Z` **execute_shell_command_code** — cd /home/vp22681/Git/prag && loom validate 2>&1; echo "---EXIT:$?---"
+- `2026-10-29T11:28:00.324Z` **read_file_code** — design/issues/chunk-pool-disk-usage-growth.md
+- `2026-10-29T11:28:05.625Z` **edit_file_code** — design/issues/chunk-pool-disk-usage-growth.md
+- `2026-10-29T11:28:09.987Z` **execute_shell_command_code** — cd /home/vp22681/Git/prag && loom validate 2>&1; echo "---EXIT:$?---"
+- `2026-10-29T11:28:15.084Z` **execute_shell_command_code** — cd /home/vp22681/Git/prag && loom index 2>&1; echo "---EXIT:$?---"
+- `2026-10-29T11:50:05.397Z` **search_workspace_code** — .
+- `2026-10-29T11:50:05.402Z` **search_workspace_code** — .
+- `2026-10-29T11:50:05.406Z` **search_workspace_code** — .
+- `2026-10-29T11:50:09.306Z` **search_workspace_code** — .
+- `2026-10-29T11:50:12.303Z` **execute_shell_command_code** — cd /home/vp22681/Git/prag && loom validate 2>&1 && loom index 2>&1; echo "---EXIT:$?---"
+
+[1 older entries dropped — budget 20000 reached]
