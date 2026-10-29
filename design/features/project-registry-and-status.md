@@ -8,6 +8,7 @@ area: daemon
 guided-by:
   - adr://ADR-009.md
   - adr://ADR-017.md
+  - adr://ADR-023.md
 ---
 ## Overview
 Indexing targets and monitoring boundaries are governed by a centralized, database-backed **Allow/Deny URI Grants** policy rule set (`grants` table) in LanceDB. The system decouples policy permissions from versioned project containers (`projects` table), operating uniformly over normalized URIs (`file:///...` and `https://...`) without dirtying user repositories with marker files (`.prag`).
@@ -42,6 +43,13 @@ When Chokidar or the discovery scanner encounters a path:
    - If `deny`: Chokidar halts directory descent immediately (zero file descriptors allocated, zero events emitted).
    - If `allow`: Chokidar watches and enqueues file events.
 
+## Admission Control and Visible Exclusions (ADR-023)
+A grant over a container directory can register hundreds of projects. Before that happens:
+1. `prag watch <uri>` dry-runs discovery. Past `ingestion.watchConfirmThreshold` (default 25 projects or 20,000 files) it prints what would be indexed and requires `--yes`. The MCP `watch_uri` tool fails with `WATCH_LIMIT_EXCEEDED` instead of prompting -- an agent has no terminal to confirm at -- and carries the counts in the error's `details`.
+2. Discovery filters run before a URI is enqueued: `ingestion.maxFileBytes` (default 2MB) and NUL-byte binary detection over the first 8KB.
+3. Everything excluded is **counted and reported** by reason (`tooLarge`, `binary`, `denied`) through `GET /projects` and `prag status`. A user whose file is missing from results must be able to tell a deliberate limit from a bug.
+4. `prag pause <project>` / `prag resume <project>` set and clear `projects.status = 'paused'`, stopping ingestion without discarding grants or indexed data.
+
 ### Running `prag deny <uri>` / `prag remove <uri>`
 1. Inserts a `deny` rule for `<normalized_uri>/**` into `grants`.
 2. Purges any matching project metadata, branch pointers, and chunks from the search index.
@@ -55,6 +63,7 @@ When Chokidar or the discovery scanner encounters a path:
 - `prag grants`: Lists active allow and deny rules with patterns and specificity.
 - `prag status [uri]`: Displays status of discovered projects, active branches, total chunks, and queue progress.
 - `prag projects`: Lists all registered project containers and their root URIs.
+- `prag pause <project>` / `prag resume <project>`: Suspends and resumes scanning and ingestion for one project, leaving its grants and indexed data intact (ADR-023).
 
 ### MCP Tools
 - `get_indexing_status(uri?: string)`: Checks whether a URI is within an allowed grant and reports project indexing state.

@@ -10,6 +10,7 @@ guided-by:
   - adr://ADR-015.md
   - adr://ADR-016.md
   - adr://ADR-017.md
+  - adr://ADR-022.md
 ---
 ## Overview
 Automated tests must run against a `prag` instance that shares nothing with the developer's own installation: its own data directory, config, runtime files, port and logs. Two operations in the accepted design are destructive — `prag reembed` drops every content table (ADR-015) and `prag prune --gc-chunks` deletes and compacts (ADR-017) — so an isolation failure is not a flaky test, it is the loss of the developer's real index. Isolation is therefore a single explicit switch with an assertable result, not four variables a harness is trusted to remember.

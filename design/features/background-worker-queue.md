@@ -11,9 +11,17 @@ guided-by:
   - adr://ADR-013.md
   - adr://ADR-015.md
   - adr://ADR-016.md
+  - adr://ADR-021.md
+  - adr://ADR-023.md
 ---
 ## Overview
-File-system changes (file mutations, additions, or deletions) must be captured asynchronously, pushed into a thread-safe processing structure, and debounced with cooldown leases to ensure eventual consistency without CPU/GPU thrashing during active editing. The daemon serves as the central manager for all LanceDB operations, ONNX embedding generation, and directory monitoring.
+File-system changes (file mutations, additions, or deletions) are captured asynchronously, queued, and debounced with cooldown leases to ensure eventual consistency without CPU/GPU thrashing during active editing. The daemon serves as the central manager for all LanceDB operations, ONNX embedding generation, and directory monitoring.
+
+## Concurrency Model (ADR-021)
+The daemon must answer `/search` inside the 100ms interactive budget *while* indexing. The blocking risk is the synchronous parse-and-hash work, not inference -- ONNX `session.run()` is an async native call dispatched to the runtime's threadpool.
+- **Workers parse.** A `worker_threads` pool (`ingestion.workerPoolSize`, default `1`) owns file reads, Tree-sitter / LiteParse parsing, chunk boundary detection, whitespace normalization, `chunkHash` computation and vectorised-unit windowing. A worker returns chunk records and nothing else.
+- **The main thread embeds and writes.** HTTP/MCP serving, ONNX embedding and *every* LanceDB write stay on the main thread. No worker holds a database handle, so ADR-005's single-writer invariant is enforced by structure rather than convention.
+- **Exactly one model copy is resident**, regardless of pool size: embedding never happens in a worker (~130MB of weights each).
 
 ## Local Port & HTTP Lifecycle Endpoints
 The daemon binds to `127.0.0.1:<port>` (default `7724`, configured in `~/.config/prag/config.json`) and exposes the following loopback endpoints. All endpoints except `GET /health` require `Authorization: Bearer <token>` per ADR-013.
@@ -30,6 +38,14 @@ To prevent GPU/CPU saturation when developers rapidly edit files:
 2. Subsequent `change` events while `now() < validUntil` add the URI to an in-memory *dirty set* without triggering immediate AST parsing or neural vector generation.
 3. When the cooldown expires, the worker flushes the single latest state of the dirty file to LanceDB.
 4. Immediate manual synchronization is available on demand via `POST /sync` or `prag sync`, which forces the flush regardless of any outstanding lease and does not return until it has settled.
+
+## Ingestion Limits (ADR-023)
+The queue holds URIs, not file content, so its memory is bounded by path count and needs no spillover mechanism. Limits are applied where the work is created instead:
+- **Discovery filters:** `ingestion.maxFileBytes` (default 2MB) and NUL-byte binary detection over the first 8KB, applied before a URI is enqueued -- alongside, not instead of, the built-in ignore grants.
+- **Visible skips:** per-project counters by reason (`tooLarge`, `binary`, `denied`) surface via `GET /projects` and `prag status`. In-memory and per-scan; not persisted to the schema.
+- **Admission control:** `prag watch` dry-runs discovery and requires `--yes` past `ingestion.watchConfirmThreshold`; `watch_uri` fails with `WATCH_LIMIT_EXCEEDED` instead, since an agent cannot confirm.
+- **Rate cap:** throughput bounded by `embedding.batchSize` and `ingestion.workerPoolSize`.
+- **Pause:** `prag pause <project>` sets `projects.status = 'paused'`, stopping ingestion without discarding grants or indexed data.
 
 ## Requirements & Interfaces
 The background daemon exposes the following internal control contracts:

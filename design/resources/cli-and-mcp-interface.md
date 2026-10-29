@@ -81,7 +81,9 @@ Adds an `allow` grant for the given URI pattern and triggers initial discovery/i
 prag watch ~/Git/prag
 
 # Watch a container directory (discovers all child git repositories):
-prag watch ~/Git
+# Past ingestion.watchConfirmThreshold (default 25 projects / 20,000 files) this
+# dry-runs discovery, prints what would be indexed, and requires --yes (ADR-023).
+prag watch ~/Git --yes
 
 # Watch remote online documentation:
 prag watch https://docs.lancedb.com/**
@@ -131,6 +133,11 @@ Cleans up stale data:
 Rebuilds the index from scratch under a new (or the currently configured) embedding model (ADR-015). Required after changing `PRAG_EMBEDDING_MODEL` on an existing index -- on a mismatch the daemon refuses every request except `/health`, `/reembed` and `/shutdown` until this is run or the config is reverted.
 
 This is **not** a vector swap. It drops every content-derived table (`branch_mapping`, `file_mapping`, `chunk_mapping`, `chunks_pool`, `vector_pool`), keeps `grants` and `projects`, writes the new sidecar, and enqueues a full rescan of every registered project. The command returns as soon as that is done -- the rebuild runs in the background on the normal ingestion queue. Track it with `prag status`; search is unavailable until the rebuild catches up.
+
+---
+
+### `prag pause <project>` / `prag resume <project>`
+Sets and clears `projects.status = 'paused'` (ADR-023). A paused project keeps its grants and its indexed data; only scanning and ingestion stop. This is the off switch for a runaway scan that does not require deleting the grant and discarding completed work.
 
 ---
 
@@ -279,6 +286,8 @@ Enables an agent to determine if a workspace or URI is indexed, its current bran
 ### Tool 3: `watch_uri`
 Allows an agent to proactively register a directory or remote documentation URL for indexing.
 
+Past `ingestion.watchConfirmThreshold` this **fails** with `WATCH_LIMIT_EXCEEDED` rather than prompting, since an agent has no terminal to confirm at (ADR-023). The error's `details` carry the project and file counts the dry run found, so the agent can put the decision to the user, who can then run `prag watch <uri> --yes`.
+
 #### JSON-Schema Input Contract:
 ```json
 {
@@ -349,7 +358,52 @@ Removes stale `branch_mapping` pointers and, only if explicitly requested, garba
 
 ---
 
-## 3. Daemon Loopback HTTP/JSON Protocol
+## 3. Error Contract (ADR-022)
+
+Every failure, on every endpoint, returns one envelope:
+
+```json
+{
+  "error": {
+    "code": "EMBEDDING_MODEL_MISMATCH",
+    "message": "Configured embedding model bge-large does not match the model used to build this index (bge-small-en-v1.5, pinned 2026-10-28).",
+    "remedy": "Run `prag reembed` to rebuild, or revert PRAG_EMBEDDING_MODEL to bge-small-en-v1.5.",
+    "details": { "configured": "bge-large", "pinned": "bge-small-en-v1.5" }
+  }
+}
+```
+
+`code` is the contract -- a closed `SCREAMING_SNAKE` set exported by `@prag/core`, never localized, never reworded. Clients and tests branch on it and nothing else, so `message` stays free to improve. `remedy` is the action to take; `details` is optional structured context.
+
+| Status | Meaning |
+|---|---|
+| `400` | malformed request body |
+| `401` | missing/invalid bearer token, or rejected `Origin` (ADR-013) |
+| `404` | unknown `projectId` |
+| `409` | state conflict -- embedding model mismatch (ADR-015), rebuild already running |
+| `422` | well-formed but invalid (e.g. `search_local` without `projectId`) |
+| `503` | daemon starting, or index unavailable during a rebuild |
+| `504` | `POST /sync` drain timeout (ADR-019) |
+| `500` | unexpected -- always a bug; stack trace to the log, generic message to the caller |
+
+### CLI Exit Codes
+| Code | Meaning |
+|---|---|
+| `0` | success, **including a search that matched nothing** -- empty results are an answer, not an error |
+| `1` | unexpected failure |
+| `2` | usage error |
+| `3` | no daemon running (spawn failed, or `PRAG_NO_SPAWN=1`) |
+| `4` | daemon identity or `apiVersion` mismatch (ADR-016) |
+| `5` | authentication failure |
+| `6` | embedding model mismatch -- `prag reembed` required (ADR-015) |
+| `7` | URI not granted, or unknown project |
+| `8` | timeout |
+
+Default CLI output prints `message`, then `remedy`. `--json` emits the envelope verbatim. MCP tool failures carry `code` and `message` into the MCP error so an agent gets a machine-readable reason.
+
+---
+
+## 4. Daemon Loopback HTTP/JSON Protocol
 
 The daemon exposes an internal REST/JSON API strictly bound to `127.0.0.1:<port>`:
 

@@ -29,4 +29,7 @@ view:
 - [Split Search into search_local and search_all Across CLI and MCP](adrs/ADR-018.md)
 - [Hermetic Test Environment - Single Root Override, Ephemeral Port, Injectable Embedder](adrs/ADR-019.md)
 - [Toolchain - Bun Workspaces with tsc, Pending a Native-Addon Spike](adrs/ADR-020.md)
+- [Ingestion Concurrency - Workers Parse, Main Thread Embeds and Writes](adrs/ADR-021.md)
+- [Unified Error Envelope, HTTP Status Mapping and CLI Exit Codes](adrs/ADR-022.md)
+- [Ingestion Limits via Discovery Filters and Watch Admission Control](adrs/ADR-023.md)
 <!-- loom:links end -->

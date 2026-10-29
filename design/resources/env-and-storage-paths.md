@@ -89,6 +89,8 @@ Every setting can be specified or overridden using environment variables prefixe
 | `PRAG_EMBEDDING_DEVICE`| `string` | `cpu` | ONNX runtime device target (`cpu`, `cuda`, `directml`, `wasm`). |
 | `PRAG_BATCH_SIZE` | `integer` | `64` | Maximum number of text chunks per ONNX inference batch. |
 | `PRAG_DEBOUNCE_MS` | `integer` | `500` | Ingestion queue debounce window for filesystem change events. |
+| `PRAG_WORKER_POOL_SIZE` | `integer` | `1` | Parse/chunk/hash worker threads. Embedding and all database writes stay on the main thread regardless (ADR-021). |
+| `PRAG_MAX_FILE_BYTES` | `integer` | `2097152` | Files larger than this are skipped at discovery and counted as `tooLarge` in `prag status` (ADR-023). |
 | `PRAG_LOG_LEVEL` | `string` | `info` | Logging verbosity: `error`, `warn`, `info`, `debug`, `trace`. |
 
 ---
@@ -110,6 +112,11 @@ If present at `~/.config/prag/config.json`, the daemon loads defaults from this 
     "batchSize": 64,
     "maxVectorUnitTokens": 400,
     "vectorUnitOverlapTokens": 60
+  },
+  "ingestion": {
+    "workerPoolSize": 1,
+    "maxFileBytes": 2097152,
+    "watchConfirmThreshold": { "projects": 25, "files": 20000 }
   },
   "storage": {
     "dataDir": null,

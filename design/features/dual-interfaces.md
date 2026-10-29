@@ -13,6 +13,7 @@ guided-by:
   - adr://ADR-013.md
   - adr://ADR-018.md
   - adr://ADR-016.md
+  - adr://ADR-022.md
 ---
 ## Overview
 Stored data is queryable via a short-lived, low-latency Command Line Interface (CLI) (<100ms response time) and natively exposed as a Model Context Protocol (MCP) server directly inside the `@prag/daemon` process over HTTP/SSE (`http://127.0.0.1:7724/mcp`). Both interfaces share the daemon's warm in-memory ONNX embedding model and LanceDB connection, utilizing **Hybrid Search** (Dense Vector + BM25 Full-Text Search with Reciprocal Rank Fusion). Search is exposed as two explicit commands/tools, not one optionally-scoped one: `search-local`/`search_local` (default, scoped to exactly one project) and `search-all`/`search_all` (unscoped, cross-project, accepts no project argument) -- see ADR-018. The CLI resolves `search-local`'s `projectId` from the working directory; MCP callers must pass it, since the in-daemon MCP server has no caller working directory to resolve.
