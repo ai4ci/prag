@@ -1,7 +1,8 @@
 // @prag/daemon — Local HTTP daemon for prag
 //
 // Binds to 127.0.0.1, authenticates via PRAG_API_KEY, and exposes
-// endpoints: GET /health, POST /search, GET /projects, POST /shutdown.
+// endpoints: GET /health, POST /search, GET /projects, POST /shutdown,
+// and GET/POST /mcp for the MCP SSE interface.
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { readFileSync, existsSync } from "node:fs";
@@ -14,6 +15,8 @@ import {
   type SearchResult,
   hybridSearch,
 } from "@prag/core";
+
+import { McpHandler } from "./mcp-server.js";
 
 // ── Config ────────────────────────────────────────────────────────────
 
@@ -52,6 +55,7 @@ export class Daemon {
   private startTime = 0;
   private db: LanceDbSchema | null = null;
   private embedder: EmbeddingProvider | null = null;
+  private mcpHandler: McpHandler | null = null;
   private token: string;
 
   constructor(
@@ -67,6 +71,7 @@ export class Daemon {
   ): Promise<void> {
     this.db = db;
     this.embedder = embedder;
+    this.mcpHandler = new McpHandler(db, embedder);
     this.startTime = Date.now();
 
     return new Promise((resolve) => {
@@ -80,6 +85,9 @@ export class Daemon {
   /** Graceful shutdown. */
   async stop(): Promise<void> {
     return new Promise((resolve) => {
+      if (this.mcpHandler) {
+        this.mcpHandler.close().catch(() => {});
+      }
       if (this.server) {
         this.server.close(() => resolve());
       } else {
@@ -132,6 +140,10 @@ export class Daemon {
         return this._handleProjects(req, res);
       case "/shutdown":
         return this._handleShutdown(req, res);
+      case "/mcp":
+        return this.mcpHandler
+          ? this.mcpHandler.handle(req, res, url)
+          : (res.writeHead(503), void res.end("Service not initialized\n"));
       default:
         res.writeHead(404);
         res.end("Not found\n");
