@@ -13,10 +13,10 @@ Expose the Model Context Protocol (MCP) server directly inside `@prag/daemon` on
 ## Implementation Details
 - Integrate `@modelcontextprotocol/sdk` utilizing the HTTP/SSE transport (`SSEServerTransport` / express/hono/node http handler).
 - Register MCP tools:
-  - `search_local` / `search_all`: Connect directly to the daemon's in-process `SearchEngine` (hybrid vector + BM25 RRF), scoped vs. unscoped respectively (ADR-018).
+  - `search_local` / `search_all`: Connect directly to the daemon's in-process `SearchEngine` (hybrid vector + BM25 RRF), scoped vs. unscoped respectively (ADR-018). `search_local` declares `projectId` as **required** -- the daemon has no access to an MCP caller's working directory, so a missing `projectId` is an error, never a silent widening to every project. `search_all` declares no `projectId` at all. `branch` defaults to `$default` on both.
   - `get_indexing_status`: Inspect watched workspace metadata, active branch, and chunk metrics.
   - `watch_uri`: Register allow grant and trigger immediate background indexing scan.
   - `deny_uri`: Register deny grant, exclude pattern from search, and halt watchers.
-  - `prune_index`: Prune stale branch pointers and, only when `gcChunks: true` is explicitly passed, garbage-collect unreferenced `chunks_pool` rows (ADR-017).
+  - `prune_index`: Prune stale branch pointers and, only when `gcChunks: true` is explicitly passed, garbage-collect unreferenced `chunks_pool` rows and their `vector_pool` rows, draining and pausing the ingestion queue for the sweep (ADR-017).
 - Support concurrent agent connections over local loopback without spawning extra child processes.
 - Enforce the bearer-token check (ADR-013) on the `/mcp` transport the same as every other endpoint.

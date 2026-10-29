@@ -18,17 +18,26 @@ If the daemon is not running when any CLI command is invoked:
 3. CLI polls `GET /health` until status returns `"ok"` (timeout: 5 seconds).
 4. CLI proceeds with the user's requested command seamlessly.
 
-### Port Identity & Version Checks (ADR-016)
-Whenever the CLI finds something already listening on the configured port (whether via lazy-spawn or `prag daemon status`), it validates the `/health` response before trusting it -- **no automatic fallback to another port**:
+Set `PRAG_NO_SPAWN=1` to disable this entirely: the CLI then fails immediately with "no daemon running and PRAG_NO_SPAWN is set" rather than forking a detached process. For callers that manage daemon lifetime themselves, such as a test harness (ADR-019).
+
+`GET /health` also reports the daemon's resolved `root`, `dataDir`, `configDir` and `runDir`, so a caller can confirm **which** instance it reached before invoking anything destructive (`prag reembed`, `prag prune --gc-chunks`). Paths only -- no indexed content or grant data.
+
+### Port Identity & API-Version Checks (ADR-016)
+Whenever the CLI finds something already listening on the configured port, it validates the `/health` response before trusting it -- **no automatic fallback to another port**:
 - If `service !== "prag-daemon"`: fails loudly -- "Port <n> is in use by a different process. Set PRAG_PORT or server.port in config.json to use a different port, or stop the conflicting process."
-- If `service === "prag-daemon"` but `version` differs from the CLI's own version: fails loudly -- "Daemon version <X> does not match CLI version <Y>. Run `prag daemon stop` to let it respawn at the current version, or align versions manually."
+- If `service === "prag-daemon"` but `apiVersion` differs from the CLI's own: fails loudly -- "Daemon speaks API version <X>, this CLI speaks <Y>. Run `prag daemon stop` to let it respawn at the current version."
+- The daemon's package `version` is **never** compared -- it is reported in error output for diagnostics only. Only a deliberate `apiVersion` bump blocks a running daemon.
+
+**Exempt commands:** `prag daemon stop`, `status`, `token` and `rotate-secret` skip the `apiVersion` check and work against any process identifying as `prag-daemon`. Otherwise the documented remedy above would fail with the error it is meant to clear.
 
 ---
 
 ### Command Reference
 
 ### `prag search-local <query>` / `prag search-all <query>` (ADR-018)
-Executes hybrid semantic vector + BM25 full-text search against indexed content. `search-local` (the default/primary command for day-to-day use) resolves `projectId` from the current working directory the same way `--branch` is auto-detected, and searches only that project. `search-all` omits project scoping and searches every registered project. A future grants-like permission may restrict which contexts can invoke `search-all` (deferred, not implemented now).
+Executes hybrid semantic vector + BM25 full-text search against indexed content. `search-local` (the default/primary command for day-to-day use) searches exactly one project, resolving `projectId` from the current working directory the same way `--branch` is auto-detected. `search-all` searches every registered project and accepts no project option.
+
+The split is for clarity, not access control: `search-local` with an explicit `--project` can reach any indexed project, so hiding `search-all` would restrict nothing. Per-caller restriction of results is tracked separately as `issue://search-result-permission-grants.md`.
 
 ```bash
 prag search-local <query> [options]
@@ -40,7 +49,7 @@ prag search-all <query> [options]
 |---|---|---|---|---|
 | `<query>` | | `string` | *(Required)* | Natural language concept, function name, symbol, or error string. |
 | `--branch` | `-b` | `string` | *(Auto-detected)* | Git branch name. If omitted, auto-detects from local `.git/HEAD`. For non-git workspaces, uses `$default`. |
-| `--project` | `-p` | `string` | *(cwd-resolved for `search-local`; unset for `search-all`)* | Override the resolved `projectId` (`search-local`), or narrow `search-all` to one project without fully scoping it the way `search-local` does. |
+| `--project` | `-p` | `string` | *(cwd-resolved)* | **`search-local` only.** Override the `projectId` resolved from the current directory. `search-all` takes no project option -- searching everything is the whole point of the command. |
 | `--limit` | `-n` | `integer` | `5` | Maximum number of matched code/document chunks to return. |
 | `--mode` | `-m` | `enum` | `hybrid` | Search execution mode: `hybrid` (dense + BM25 RRF), `vector` (dense only), or `fts` (BM25 only). |
 | `--json` | | `boolean` | `false` | Output machine-readable JSON array of hits instead of styled terminal cards. |
@@ -115,10 +124,13 @@ Manually triggers an immediate scan, reconciles current Git branches, and flushe
 Cleans up stale data:
 - Purges `branch_mapping` entries for Git branches that no longer exist.
 - Performs garbage collection on unreferenced `file_mapping` and `chunk_mapping` records.
-- With `--gc-chunks`: additionally deletes unreferenced `chunks_pool` rows and compacts the table. Never runs automatically or on a schedule (ADR-017) -- omit the flag to only prune the lightweight pointer tables.
+- With `--gc-chunks`: additionally deletes unreferenced `chunks_pool` rows, cascades the delete to their `vector_pool` rows, and compacts both tables. Never runs automatically or on a schedule (ADR-017) -- omit the flag to only prune the lightweight pointer tables.
+- The `--gc-chunks` sweep **drains and pauses the ingestion queue** for its duration, because dedup is a check-then-act sequence and a concurrent sweep would delete a chunk between the ingester's cache hit and its pointer write (ADR-017). Plain `prag prune` does not pause anything.
 
 ### `prag reembed [--model <name>]`
-Re-embeds every `chunks_pool.text` row with a new (or the currently configured) embedding model, then updates the pinned `.embedding-model.json` sidecar on success (ADR-015). Required after changing `PRAG_EMBEDDING_MODEL` on an existing index -- the daemon refuses to write to `chunks_pool` until this is run or the config is reverted.
+Rebuilds the index from scratch under a new (or the currently configured) embedding model (ADR-015). Required after changing `PRAG_EMBEDDING_MODEL` on an existing index -- on a mismatch the daemon refuses every request except `/health`, `/reembed` and `/shutdown` until this is run or the config is reverted.
+
+This is **not** a vector swap. It drops every content-derived table (`branch_mapping`, `file_mapping`, `chunk_mapping`, `chunks_pool`, `vector_pool`), keeps `grants` and `projects`, writes the new sidecar, and enqueues a full rescan of every registered project. The command returns as soon as that is done -- the rebuild runs in the background on the normal ingestion queue. Track it with `prag status`; search is unavailable until the rebuild catches up.
 
 ---
 
@@ -161,7 +173,7 @@ Because the MCP server runs inside the daemon process:
 ### MCP Tools Provided
 
 ### Tool 1a: `search_local`
-Executes hybrid semantic vector + BM25 keyword search scoped to the calling workspace's project only (ADR-018). This is the default/primary search tool.
+Executes hybrid semantic vector + BM25 keyword search scoped to exactly one project (ADR-018). This is the default/primary search tool. `projectId` is **required** -- unlike the CLI, an MCP client has no working directory the daemon can resolve, so omitting it is an error rather than a silent widening to every project.
 
 #### JSON-Schema Input Contract:
 ```json
@@ -177,12 +189,12 @@ Executes hybrid semantic vector + BM25 keyword search scoped to the calling work
       },
       "projectId": {
         "type": "string",
-        "description": "Project workspace slug to search. If omitted, resolved from the caller's current workspace context."
+        "description": "Project workspace slug to search. Required: the daemon hosts MCP in-process over HTTP/SSE and has no access to the caller's working directory, so it cannot derive this."
       },
       "branch": {
         "type": "string",
-        "description": "Git branch context (defaults to current git branch, or '$default' for non-git/web).",
-        "default": "main"
+        "description": "Git branch context. Use '$default' for non-git projects and web content.",
+        "default": "$default"
       },
       "limit": {
         "type": "integer",
@@ -196,7 +208,7 @@ Executes hybrid semantic vector + BM25 keyword search scoped to the calling work
         "default": "hybrid"
       }
     },
-    "required": ["query"]
+    "required": ["query", "projectId"]
   }
 }
 ```
@@ -204,7 +216,7 @@ Executes hybrid semantic vector + BM25 keyword search scoped to the calling work
 ---
 
 ### Tool 1b: `search_all`
-Executes the same hybrid search, unscoped across every registered project (ADR-018). Reserved for explicit cross-project/personal-knowledge-base queries; a future grants-like permission may restrict which MCP clients can call this tool (deferred, not implemented now).
+Executes the same hybrid search, unscoped across every registered project (ADR-018). Reserved for explicit cross-project/personal-knowledge-base queries. It deliberately accepts **no** `projectId` -- a project filter here would just be `search_local` under another name.
 
 #### JSON-Schema Input Contract:
 ```json
@@ -220,8 +232,8 @@ Executes the same hybrid search, unscoped across every registered project (ADR-0
       },
       "branch": {
         "type": "string",
-        "description": "Git branch context (defaults to current git branch, or '$default' for non-git/web).",
-        "default": "main"
+        "description": "Git branch context. Use '$default' for non-git projects and web content.",
+        "default": "$default"
       },
       "limit": {
         "type": "integer",
@@ -343,7 +355,7 @@ The daemon exposes an internal REST/JSON API strictly bound to `127.0.0.1:<port>
 
 | Method | Endpoint | Description | Payload / Response |
 |---|---|---|---|
-| `GET` | `/health` | Daemon heartbeat & status | `{ status: "ok", service: "prag-daemon", pid: number, port: number, version: string, uptime: number }` |
+| `GET` | `/health` | Daemon heartbeat, identity & resolved paths | `{ status: "ok", service: "prag-daemon", apiVersion: number, pid: number, port: number, version: string, uptime: number, root: string, dataDir: string, configDir: string, runDir: string }` |
 | `GET` | `/mcp` | MCP Server-Sent Events (SSE) stream | Initiates persistent MCP protocol session |
 | `POST` | `/mcp` | MCP client JSON-RPC message target | Standard MCP request/notification payload |
 | `POST` | `/search` | Executes hybrid search | Body: `SearchQueryOptions` $\to$ Returns: `SearchHitResult[]` |
@@ -351,7 +363,7 @@ The daemon exposes an internal REST/JSON API strictly bound to `127.0.0.1:<port>
 | `POST` | `/grants` | Adds allow or deny rule | Body: `{ pattern: string, action: 'allow'|'deny', reason?: string }` |
 | `DELETE` | `/grants` | Removes an active rule | Body: `{ pattern: string }` |
 | `GET` | `/projects` | Lists registered projects | Returns: `ProjectRecord[]` |
-| `POST` | `/sync` | Force reconciliation | Body: `{ projectId?: string }` $\to$ Returns: `{ synced: true }` |
+| `POST` | `/sync` | Drain barrier: force reconciliation and flush | Body: `{ projectId?: string }` $\to$ Returns once the queue is empty and all writes are committed: `{ synced: true, flushedFiles: number, pendingFiles: number }` |
 | `POST` | `/prune` | Run branch pruning & GC | Body: `{ gcChunks?: boolean }` (default `false`) $\to$ Returns: `{ prunedBranches: number, purgedChunks: number }` |
-| `POST` | `/reembed` | Re-embed `chunks_pool` with a new model | Body: `{ model?: string }` $\to$ Returns: `{ reembedded: number }` |
+| `POST` | `/reembed` | Drop content tables and requeue a full rebuild under a new model | Body: `{ model?: string }` $\to$ Returns immediately: `{ requeued: number }` (projects enqueued) |
 | `POST` | `/shutdown`| Graceful daemon exit | Flushes queues and terminates process cleanly. |

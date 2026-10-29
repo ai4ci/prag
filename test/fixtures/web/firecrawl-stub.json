@@ -1,0 +1,10 @@
+{
+  "url": "https://example.test/docs/getting-started",
+  "markdown": "# Getting started\n\nThis page is a canned response. It is served by the test stub so that web ingestion tests never make an outbound request.\n\n## Installation\n\nInstall the package with your package manager of choice:\n\n```bash\nnpm install example-client\n```\n\n## Configuration\n\nThe client reads `EXAMPLE_API_URL` from the environment. If it is unset the\nclient falls back to `http://localhost:8080`, which is what the development\nserver listens on.\n\n### Timeouts\n\nEvery request has a 30 second deadline. A request that exceeds it is retried\nonce with exponential backoff, then surfaced to the caller as a\n`TimeoutError`.\n\n## Next steps\n\n- Read the API reference for the full list of endpoints.\n- See the examples directory for a worked integration.\n- Report problems on the issue tracker.\n",
+  "html": "<h1>Getting started</h1>\n<p>This page is a canned response. It is served by the test stub so that web ingestion tests never make an outbound request.</p>\n<h2>Installation</h2>\n<p>Install the package with your package manager of choice:</p>\n<pre><code class=\"language-bash\">npm install example-client</code></pre>\n<h2>Configuration</h2>\n<p>The client reads <code>EXAMPLE_API_URL</code> from the environment. If it is unset the client falls back to <code>http://localhost:8080</code>, which is what the development server listens on.</p>\n<h3>Timeouts</h3>\n<p>Every request has a 30 second deadline. A request that exceeds it is retried once with exponential backoff, then surfaced to the caller as a <code>TimeoutError</code>.</p>\n<h2>Next steps</h2>\n<ul>\n<li>Read the API reference for the full list of endpoints.</li>\n<li>See the examples directory for a worked integration.</li>\n<li>Report problems on the issue tracker.</li>\n</ul>\n",
+  "metadata": {
+    "title": "Getting started — Example Client",
+    "description": "Install and configure the example client, including environment variables and request timeouts.",
+    "statusCode": 200
+  }
+}

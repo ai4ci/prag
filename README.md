@@ -31,7 +31,8 @@ prag/
 
 * **Content-Addressable Storage (CAS):** File contents are parsed and embedded *exactly once* based on their unique cryptographic hash. Git checkouts or branches sharing identical code blocks consume zero extra CPU/GPU cycles and zero duplicate disk footprint.
 * **Pre-Filtering Matrix Layer:** Branch-awareness is enforced via LanceDB's fast scalar predicates. Filtering out irrelevant branches is executed at the native disk layout layer *before* scoring vector distances.
-* **Local Content Retention:** Raw text segments are cached directly inside LanceDB alongside vector floats, making query retrieval resilient against uncommitted edits and rapid workspace branch hopping.
+* **Local Content Retention:** Raw text segments are cached directly inside LanceDB (`chunks_pool`) alongside their embeddings (`vector_pool`), making query retrieval resilient against uncommitted edits and rapid workspace branch hopping.
+* **Chunks vs Vectorised Units:** A chunk is one whole structural unit and is always returned whole. When a chunk is too large for the embedding model, it is embedded as several overlapping windows under one hash rather than being split (see ADR-014).
 
 ---
 
@@ -39,7 +40,7 @@ prag/
 
 ### Phase 1: Storage & Shared Core (Current WIP)
 - [ ] Define shared TypeScript database model definitions (`@prag/core`).
-- [ ] Implement LanceDB initialization scripts with dual table setups (`chunks_pool` and `file_mapping`).
+- [ ] Implement LanceDB initialization scripts for the 7-table schema (`grants`, `projects`, `branch_mapping`, `file_mapping`, `chunk_mapping`, `chunks_pool`, `vector_pool`).
 
 ### Phase 2: Ingestion & Parser Daemon
 - [ ] Integrate `tree-sitter-language-pack` for multi-language syntax chunking (TypeScript, Python, R).
@@ -77,15 +78,18 @@ prag search-all "statistical variance check for matrices" --limit 3
 {
   "mcpServers": {
     "prag": {
-      "url": "http://127.0.0.1:7724/mcp"
+      "url": "http://127.0.0.1:7724/mcp",
+      "headers": {
+        "Authorization": "Bearer <token from `prag daemon token`>"
+      }
     }
   }
 }
 ```
-No separate process to launch: the MCP server runs inside the already-running (or lazily auto-spawned) `@prag/daemon`.
+No separate process to launch: the MCP server runs inside the already-running (or lazily auto-spawned) `@prag/daemon`. Every endpoint except `/health` requires the bearer token (ADR-013); the CLI reads it automatically.
 
 ---
 
 ## 🔒 Security & Privacy
 
-`prag` is strictly air-gapped. Telemetry, telemetry wrappers, and remote API calls are omitted by design. Your code strings, structural graphs, document text, and vector floats never leave your machine.
+`prag` is self-hosted and local by default. Telemetry, analytics, and usage reporting are omitted by design, unconditionally. With no web URIs registered, `prag` makes zero outbound network calls: your code strings, structural graphs, document text, and vector floats never leave your machine. Outbound calls happen only for URIs you explicitly grant with `prag watch https://...`, and the web fetcher can be pointed at a self-hosted instance for a fully local deployment (see ADR-012).

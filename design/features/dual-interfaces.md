@@ -15,11 +15,11 @@ guided-by:
   - adr://ADR-016.md
 ---
 ## Overview
-Stored data is queryable via a short-lived, low-latency Command Line Interface (CLI) (<15ms response time) and natively exposed as a Model Context Protocol (MCP) server directly inside the `@prag/daemon` process over HTTP/SSE (`http://127.0.0.1:7724/mcp`). Both interfaces share the daemon's warm in-memory ONNX embedding model and LanceDB connection, utilizing **Hybrid Search** (Dense Vector + BM25 Full-Text Search with Reciprocal Rank Fusion). Search is exposed as two explicit commands/tools, not one optionally-scoped one: `search-local`/`search_local` (default, scoped to the caller's current project) and `search-all`/`search_all` (unscoped, cross-project) -- see ADR-018.
+Stored data is queryable via a short-lived, low-latency Command Line Interface (CLI) (<15ms response time) and natively exposed as a Model Context Protocol (MCP) server directly inside the `@prag/daemon` process over HTTP/SSE (`http://127.0.0.1:7724/mcp`). Both interfaces share the daemon's warm in-memory ONNX embedding model and LanceDB connection, utilizing **Hybrid Search** (Dense Vector + BM25 Full-Text Search with Reciprocal Rank Fusion). Search is exposed as two explicit commands/tools, not one optionally-scoped one: `search-local`/`search_local` (default, scoped to exactly one project) and `search-all`/`search_all` (unscoped, cross-project, accepts no project argument) -- see ADR-018. The CLI resolves `search-local`'s `projectId` from the working directory; MCP callers must pass it, since the in-daemon MCP server has no caller working directory to resolve.
 
 ## Hybrid Search Engine Architecture
 Queries combine neural semantic search and exact keyword matching:
-1. **Dense Vector Search:** Encodes the natural language query into a vector using the hot in-memory model and computes cosine similarity against `chunks_pool.vector`.
+1. **Dense Vector Search:** Encodes the natural language query into a vector using the hot in-memory model and computes cosine similarity against `vector_pool.vector`, then collapses to the best-scoring vectorised unit per `chunkHash` so the chunk is the unit of ranking (ADR-014).
 2. **BM25 Lexical Search:** Runs full-text search against `chunks_pool.text` using LanceDB's native inverted FTS index, ensuring exact symbol and function names match.
 3. **Reciprocal Rank Fusion (RRF):** Fuses dense and lexical ranks into a unified relevance score.
 4. **Branch & Project Filtering:** Restricts candidate chunks to the active branch pointer in `branch_mapping` and target workspace `projectId`.
@@ -32,13 +32,14 @@ Queries combine neural semantic search and exact keyword matching:
   - `prag daemon start`: Starts the daemon process explicitly if not already running.
   - `prag daemon status`: Reports running state, PID, bound port, registered workspaces, and memory footprint.
   - `prag daemon stop`: Sends graceful termination request (`POST /shutdown`) and cleans up PID tracking.
+  - Lifecycle subcommands (`stop`, `status`, `token`, `rotate-secret`) are exempt from the `/health` `apiVersion` check, so they still work against a protocol-skewed daemon (ADR-016).
 
 ## Query Engine Interface
 ```typescript
 export interface SearchQueryOptions {
   query: string;           // Natural language or keyword search query
   activeBranch?: string;   // Target branch context to enforce; defaults to '$default' if omitted (the daemon does not auto-detect git branch itself -- the CLI resolves it from local .git/HEAD before calling /search)
-  projectId?: string;      // Optional specific project filter
+  projectId?: string;      // Project filter. Always set by search-local/search_local, always absent for search-all/search_all (ADR-018)
   limit?: number;          // Top-K results (default: 5)
   mode?: 'hybrid' | 'vector' | 'fts'; // Search mode (default: 'hybrid')
 }

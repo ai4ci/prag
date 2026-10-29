@@ -27,13 +27,14 @@ Inside the resolved base paths, `prag` maintains the following structured files:
 ```text
 ~/.local/share/prag/
 ├── lancedb/
-│   ├── .embedding-model.json     # { model, dim, pinnedAt } -- model the index was built with (ADR-015)
+│   ├── .embedding-model.json     # { model, dim, maxVectorUnitTokens, pinnedAt } -- model the index was built with (ADR-015)
 │   ├── grants.lance/             # Allow/deny URI grants table
 │   ├── projects.lance/           # Registered project workspaces & tracking modes
 │   ├── branch_mapping.lance/     # Branch heads pointing to file commit hashes
 │   ├── file_mapping.lance/       # Content-addressable file metadata & chunk lists
 │   ├── chunk_mapping.lance/      # File-to-chunk location mapping (line numbers, AST scope)
-│   └── chunks_pool.lance/        # Global content-deduplicated chunks & 384-dim dense vectors
+│   ├── chunks_pool.lance/        # Global content-deduplicated chunk text (BM25 FTS indexed)
+│   └── vector_pool.lance/        # Dense vectors per vectorised unit, keyed (chunkHash, unitIndex)
 └── models/
     └── Xenova/
         └── bge-small-en-v1.5/    # Downloaded ONNX model weights and tokenizer files
@@ -44,9 +45,16 @@ Inside the resolved base paths, `prag` maintains the following structured files:
 ~/.local/state/prag/
 ├── daemon.pid                    # Stores PID of currently running background daemon
 ├── daemon.port                   # Active loopback port number (e.g., 7724)
-├── daemon.token                  # Bearer token for HTTP/MCP auth, mode 0600 (ADR-013)
-└── daemon.sock                   # Optional local UNIX domain socket (if enabled)
+└── daemon.token                  # Bearer token for HTTP/MCP auth, mode 0600 (ADR-013)
 ```
+
+### Path Precedence (ADR-019)
+For each of the four categories, the first match wins:
+1. the explicitly set category variable (`PRAG_DATA_DIR`, `PRAG_CONFIG_DIR`, `PRAG_RUN_DIR`, `PRAG_LOG_DIR`);
+2. the path derived from `PRAG_ROOT`, if it is set;
+3. the XDG / platform default from the table above.
+
+When `PRAG_ROOT` is set, an unset category **never** falls back to an XDG path. One variable therefore isolates an entire instance, and deleting that one directory removes every trace of it. This matters because `prag reembed` (ADR-015) and `prag prune --gc-chunks` (ADR-017) are destructive: partial isolation is how a test run destroys a real index.
 
 ### Configuration Directory (`PRAG_CONFIG_DIR`)
 ```text
@@ -69,13 +77,15 @@ Every setting can be specified or overridden using environment variables prefixe
 
 | Environment Variable | Type | Default Value | Description |
 |---|---|---|---|
+| `PRAG_ROOT` | `string` | *(unset)* | Single isolation override. When set, all four base directories derive from it: `<root>/data`, `<root>/config`, `<root>/state`, `<root>/state/logs`. See precedence below (ADR-019). |
 | `PRAG_DATA_DIR` | `string` | `~/.local/share/prag` | Path to persistent LanceDB tables and model weight caches. |
 | `PRAG_CONFIG_DIR` | `string` | `~/.config/prag` | Path to user configuration JSON file (`config.json`). |
 | `PRAG_RUN_DIR` | `string` | `~/.local/state/prag` | Path where PID and port discovery files are written. |
 | `PRAG_LOG_DIR` | `string` | `~/.local/state/prag/logs` | Path where daemon operational logs are written. |
-| `PRAG_PORT` | `integer` | `7724` | Loopback HTTP port for the daemon (`127.0.0.1:<port>`). |
+| `PRAG_PORT` | `integer` | `7724` | Loopback HTTP port for the daemon (`127.0.0.1:<port>`). `0` binds a kernel-assigned ephemeral port, written to `daemon.port` as usual -- the only supported way to run daemons in parallel (ADR-019). |
+| `PRAG_NO_SPAWN` | `boolean` | `false` | When `1`, the CLI never lazily auto-spawns a daemon; it fails immediately instead. For callers that own daemon lifetime, such as a test harness (ADR-019). |
 | `PRAG_HOST` | `string` | `127.0.0.1` | Bind host (strictly local loopback). |
-| `PRAG_EMBEDDING_MODEL`| `string` | `Xenova/bge-small-en-v1.5` | Hugging Face / Transformers.js model identifier for ONNX embeddings. |
+| `PRAG_EMBEDDING_MODEL`| `string` | `Xenova/bge-small-en-v1.5` | Hugging Face / Transformers.js model identifier for ONNX embeddings. Also accepts `fake:<dim>` (e.g. `fake:384`) to select the deterministic built-in embedder -- offline and instant, but **not** semantically meaningful (ADR-019). |
 | `PRAG_EMBEDDING_DEVICE`| `string` | `cpu` | ONNX runtime device target (`cpu`, `cuda`, `directml`, `wasm`). |
 | `PRAG_BATCH_SIZE` | `integer` | `64` | Maximum number of text chunks per ONNX inference batch. |
 | `PRAG_DEBOUNCE_MS` | `integer` | `500` | Ingestion queue debounce window for filesystem change events. |
@@ -98,8 +108,8 @@ If present at `~/.config/prag/config.json`, the daemon loads defaults from this 
     "model": "Xenova/bge-small-en-v1.5",
     "device": "cpu",
     "batchSize": 64,
-    "maxChunkTokens": 400,
-    "chunkOverlapTokens": 60
+    "maxVectorUnitTokens": 400,
+    "vectorUnitOverlapTokens": 60
   },
   "storage": {
     "dataDir": null,

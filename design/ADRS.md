@@ -22,9 +22,10 @@ view:
 - [Native HTTP/SSE MCP Server Endpoint Built Directly into Background Daemon](adrs/ADR-011.md)
 - [Air-Gap Scope Clarification (Self-Hosted by Default, Not Zero-Network)](adrs/ADR-012.md)
 - [Shared-Secret Authentication for the Loopback HTTP/MCP Endpoint](adrs/ADR-013.md)
-- [Sliding-Window Sub-Chunking for Oversized AST Nodes](adrs/ADR-014.md)
-- [Pinned Embedding Model with Explicit Re-Embed Migration](adrs/ADR-015.md)
-- [Loud Daemon Identity and Version Mismatch, No Automatic Port Fallback](adrs/ADR-016.md)
+- [Vectorised Units - Sliding-Window Vectorisation of Oversized Chunks](adrs/ADR-014.md)
+- [Pinned Embedding Model with Full Rebuild on Re-Embed](adrs/ADR-015.md)
+- [Loud Daemon Identity and API-Version Mismatch, No Automatic Port Fallback](adrs/ADR-016.md)
 - [Manual Non-Eager Garbage Collection for chunks_pool via CLI and MCP](adrs/ADR-017.md)
 - [Split Search into search_local and search_all Across CLI and MCP](adrs/ADR-018.md)
+- [Hermetic Test Environment - Single Root Override, Ephemeral Port, Injectable Embedder](adrs/ADR-019.md)
 <!-- loom:links end -->

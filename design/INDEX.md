@@ -10,9 +10,12 @@ view:
 
 Overview of architectural decisions, features, and engineering tasks for `prag` (**Pragmatic RAG**).
 
+## Indexes
+- [Architecture Decision Records](ADRS.md) · [Features](FEATURES.md) · [Tasks](TASKS.md) · [Issues](ISSUES.md)
+
 ## Architectural Resources & Specifications
 - [Storage Schema & Database Architecture](resources/storage-schema.md)
-- [CLI & Stdio MCP Interface Specification](resources/cli-and-mcp-interface.md)
+- [CLI & HTTP/SSE MCP Interface Specification](resources/cli-and-mcp-interface.md)
 - [Environment Variables, Configuration, and Storage Paths](resources/env-and-storage-paths.md)
 
 ## Features Summary
@@ -25,6 +28,7 @@ Overview of architectural decisions, features, and engineering tasks for `prag` 
 - [Multi-Format Code and Document Parsing](features/multi-format-parsing.md)
 - [Unified Allow/Deny URI Grants and Database-Backed Project Discovery](features/project-registry-and-status.md)
 - [Syntax-Aware Structural Code Chunking and Whitespace Normalization](features/syntax-aware-chunking.md)
+- [Test Harness, Environment Isolation, and Fixture Corpus](features/test-harness-and-fixtures.md)
 - [Layout-Preserving Document Chunking](features/layout-preserving-chunking.md)
 - [Non-Local Content and Web URI Ingestion (Firecrawl)](features/web-and-nonlocal-content.md)
 - [Multi-Project Multi-Tenant Isolation](features/workspace-isolation.md)
