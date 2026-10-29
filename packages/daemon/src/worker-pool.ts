@@ -80,6 +80,11 @@ export class WorkerPool {
 
   /** Terminate all workers. */
   async close(): Promise<void> {
+    // Remove all listeners so the worker's internal MessagePort can
+    // be GC'd and the event loop can drain cleanly.
+    for (const w of this.workers) {
+      w.removeAllListeners();
+    }
     await Promise.allSettled(
       this.workers.map((w) => w.terminate()),
     );

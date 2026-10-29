@@ -1,0 +1,20 @@
+{
+  "name": "@prag/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "prag": "./src/main.ts"
+  },
+  "scripts": {
+    "test": "tsx --test src/*.test.ts"
+  },
+  "dependencies": {
+    "@prag/daemon": "*",
+    "@prag/core": "*"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0",
+    "typescript": "^7.0.2"
+  }
+}

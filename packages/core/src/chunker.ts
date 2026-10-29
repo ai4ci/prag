@@ -189,10 +189,9 @@ export function chunkFile(
   const chunks: Chunk[] = [];
   const seenHashes = new Set<string>();
 
-  // Map structure items by line range for scope context
-  const scopeMap = buildScopeMap(result.structure ?? []);
+  // Build scope tree for context annotation
+  const scopeTree = buildScopeTree(result.structure ?? []);
 
-  // Track next expected chunk from structure positions for dedup later
   for (const codeChunk of result.chunks ?? []) {
     const text = (codeChunk.content ?? "").trim();
     if (!text) continue;
@@ -201,22 +200,13 @@ export function chunkFile(
     if (seenHashes.has(nHash)) continue;
     seenHashes.add(nHash);
 
-    const contextPath = codeChunk.metadata?.contextPath;
-
-    // Try to find corresponding structure items for scope context
+    // Build scope context from the scope tree
     let scopeContext: string | null = null;
-    if (contextPath && contextPath.length > 0) {
-      scopeContext = `File: ${path} > ${contextPath.map((s) => `... > ${s}`).join("")}`;
-    } else {
-      // Deduce scope from structure items overlapping this chunk's lines
-      const cl = codeChunk.startLine ?? 0;
-      const ce = codeChunk.endLine ?? 0;
-      const matched = scopeMap.filter(
-        (s) => s.startLine <= ce && s.endLine >= cl,
-      );
-      if (matched.length > 0) {
-        scopeContext = `File: ${path} > ${matched.map((s) => `${s.kind}: ${s.name}`).join(" > ")}`;
-      }
+    const cl = codeChunk.startLine ?? 0;
+    const ce = codeChunk.endLine ?? 0;
+    const pathScopes = findScopePath(scopeTree, cl, ce);
+    if (pathScopes.length > 0) {
+      scopeContext = `File: ${path} > ${pathScopes.map((s) => `${s.kind}: ${s.name}`).join(" > ")}`;
     }
 
     chunks.push({
@@ -240,33 +230,52 @@ export function chunkFile(
 
 // ── Scope helpers ─────────────────────────────────────────────────────
 
-interface ScopeEntry {
+interface ScopeNode {
   kind: string;
   name: string;
   startLine: number;
   endLine: number;
+  children: ScopeNode[];
 }
 
-function buildScopeMap(items: any[]): ScopeEntry[] {
-  const result: ScopeEntry[] = [];
+function buildScopeTree(items: any[]): ScopeNode[] {
+  const result: ScopeNode[] = [];
 
-  function walk(items: any[]) {
+  function walk(items: any[]): ScopeNode[] {
+    const nodes: ScopeNode[] = [];
     for (const item of items) {
       const span = item.span;
-      if (span) {
-        result.push({
-          kind: item.kind ?? "Item",
-          name: item.name ?? "<anonymous>",
-          startLine: span.startLine ?? 0,
-          endLine: span.endLine ?? 0,
-        });
-      }
-      if (item.children) {
-        walk(item.children);
-      }
+      nodes.push({
+        kind: item.kind ?? "Item",
+        name: item.name ?? "<anonymous>",
+        startLine: span?.startLine ?? 0,
+        endLine: span?.endLine ?? 0,
+        children: item.children ? walk(item.children) : [],
+      });
     }
+    return nodes;
   }
 
-  walk(items);
-  return result;
+  return walk(items);
+}
+
+/**
+ * Find the deepest chain of scopes that overlaps [startLine, endLine).
+ * Since tree-sitter chunks may split across structural boundaries, we
+ * match by overlap (the scope item's line range overlaps with the
+ * chunk's line range). Returns an array from outermost to innermost,
+ * e.g. [{kind:"Class",name:"Hello"}, {kind:"Method",name:"greet"}]
+ */
+function findScopePath(
+  nodes: ScopeNode[],
+  startLine: number,
+  endLine: number,
+): Array<{ kind: string; name: string }> {
+  for (const node of nodes) {
+    if (node.startLine <= endLine && node.endLine >= startLine) {
+      const inner = findScopePath(node.children, startLine, endLine);
+      return [{ kind: node.kind, name: node.name }, ...inner];
+    }
+  }
+  return [];
 }

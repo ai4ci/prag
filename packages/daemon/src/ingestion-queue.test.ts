@@ -32,6 +32,10 @@ let ctx: TestCtx | undefined;
 afterEach(async () => {
   await ctx?.cleanup();
   ctx = undefined;
+  // Allow chokidar's native fs.watch handle to release. Without this,
+  // the event loop can retain pending work that prevents the test
+  // runner from draining.
+  await new Promise((r) => setImmediate(r));
 });
 
 function setup(cooldownMs = 100): TestCtx {
@@ -60,7 +64,12 @@ void describe("IngestionQueue", () => {
 
     writeFileSync(join(tmpDir, "existing.ts"), "export const a = 1;\n");
     queue.registerProject("test", tmpDir);
-    await sleep(500);
+
+    // Poll for up to 2s — chokidar's initial scan is async
+    for (let i = 0; i < 20; i++) {
+      if (ingested.some((r) => r.filePath.endsWith("existing.ts"))) break;
+      await sleep(100);
+    }
 
     assert.ok(
       ingested.some((r) => r.filePath.endsWith("existing.ts")),

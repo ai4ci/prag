@@ -16,13 +16,13 @@ void describe("Daemon with ingestion", () => {
     schema: LanceDbSchema | null;
     daemon: Daemon | null;
   } = { tmpDir: "", projectDir: "", schema: null, daemon: null };
-  const PORT = 19877;
-  const TOKEN = "test-ingest";
 
   after(async () => {
     await ctx.daemon?.stop();
     await ctx.schema?.close();
     if (ctx.tmpDir) rmSync(ctx.tmpDir, { recursive: true, force: true });
+    // Allow the event loop to drain after closing the server + watchers
+    await new Promise((r) => setImmediate(r));
   });
 
   void it("registers a project and indexes a file", async () => {
@@ -39,18 +39,21 @@ void describe("Daemon with ingestion", () => {
     await ctx.schema.init();
 
     ctx.daemon = new Daemon({
-      port: PORT,
-      token: TOKEN,
+      port: 0,
+      token: "test-ingest",
+      noExit: true,
       ingestion: { poolSize: 1, cooldownMs: 50 },
     });
     await ctx.daemon.start(ctx.schema, new FakeEmbeddingProvider(4));
 
+    const port = ctx.daemon.boundPort!;
+
     // Register project
-    const reg = await fetch(`http://127.0.0.1:${PORT}/projects`, {
+    const reg = await fetch(`http://127.0.0.1:${port}/projects`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${TOKEN}`,
+        Authorization: "Bearer test-ingest",
       },
       body: JSON.stringify({ projectId: "e2e-test", rootUri: ctx.projectDir }),
     });
@@ -67,18 +70,18 @@ void describe("Daemon with ingestion", () => {
     await sleep(1500);
 
     // Sync to flush
-    const syncRes = await fetch(`http://127.0.0.1:${PORT}/sync`, {
+    const syncRes = await fetch(`http://127.0.0.1:${port}/sync`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${TOKEN}` },
+      headers: { Authorization: "Bearer test-ingest" },
     });
     assert.equal(syncRes.status, 200);
 
     // Search
-    const searchRes = await fetch(`http://127.0.0.1:${PORT}/search`, {
+    const searchRes = await fetch(`http://127.0.0.1:${port}/search`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${TOKEN}`,
+        Authorization: "Bearer test-ingest",
       },
       body: JSON.stringify({ query: "hello world", limit: 5 }),
     });

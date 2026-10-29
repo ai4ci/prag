@@ -6,6 +6,9 @@ status: todo
 priority: high
 relates-to:
   - feature://dual-interfaces.md
+addressed-by:
+  - src://cli/src/daemon-client.ts#DaemonClient
+  - src://cli/src/main.ts#main
 ---
 ## Description
 Implement the short-lived CLI client (@prag/cli) for querying the index and managing the daemon.

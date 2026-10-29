@@ -15,6 +15,9 @@ addressed-by:
   - src://core/src/search.ts#mapToFiles
   - src://core/src/search.ts#SearchChunkHit
   - src://core/src/search.ts#SearchFileHit
+  - src://cli/src/daemon-client.ts#SearchOptions
+  - src://cli/src/daemon-client.ts#SearchHit
+  - src://cli/src/daemon-client.ts#SearchResult
 ---
 ## Description
 Implement hybrid search in @prag/daemon combining dense vector embeddings and BM25 full-text search.

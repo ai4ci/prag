@@ -14,8 +14,8 @@ implemented-by:
   - src://core/src/chunker.ts#normalizeWhitespace
   - src://core/src/chunker.ts#chunkHash
   - src://core/src/chunker.ts#fallbackChunk
-  - src://core/src/chunker.ts#ScopeEntry
-  - src://core/src/chunker.ts#buildScopeMap
+  - src://core/src/chunker.ts#buildScopeTree
+  - src://core/src/chunker.ts#findScopePath
   - src://core/src/chunker.ts#Chunk
   - src://core/src/chunker.ts#ChunkedFile
 ---

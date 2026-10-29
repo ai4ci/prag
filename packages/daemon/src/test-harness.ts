@@ -71,6 +71,7 @@ export async function startTestDaemon(
   const daemon = new Daemon({
     port: port || undefined,
     token,
+    noExit: true,
   });
 
   await daemon.start(schema, new FakeEmbeddingProvider(dim));

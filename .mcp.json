@@ -9,7 +9,7 @@
         "--header",
         "Authorization:Bearer Sd68lONDS10GaEvOIi1GYFuJbBQ3e3"
       ],
-      "directTools": true
+      "directTools": false
     }
   }
 }

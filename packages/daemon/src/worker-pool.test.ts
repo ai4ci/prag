@@ -1,4 +1,4 @@
-import { describe, it, before, after } from "node:test";
+import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -12,10 +12,11 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const WORKER_SCRIPT = join(__dirname, "ingestion-worker.ts");
 
 void describe("WorkerPool", () => {
-  let pool: WorkerPool;
+  let pool: WorkerPool | undefined;
 
-  after(() => {
-    pool?.close().catch(() => {});
+  afterEach(async () => {
+    await pool?.close();
+    pool = undefined;
   });
 
   void it("spawns the requested number of workers", () => {

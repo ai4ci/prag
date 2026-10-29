@@ -11,7 +11,6 @@ void describe("MCP server", () => {
   let tmpDir: string;
   let schema: LanceDbSchema;
   let daemon: Daemon;
-  const PORT = 19877;
 
   before(async () => {
     tmpDir = mkdtempSync(join(tmpdir(), "prag-mcp-"));
@@ -23,7 +22,7 @@ void describe("MCP server", () => {
     });
     await schema.init();
 
-    daemon = new Daemon({ port: PORT, token: "test-token" });
+    daemon = new Daemon({ port: 0, token: "test-token", noExit: true });
     await daemon.start(schema, new FakeEmbeddingProvider(4));
   });
 
@@ -31,12 +30,14 @@ void describe("MCP server", () => {
     await daemon.stop();
     await schema.close();
     rmSync(tmpDir, { recursive: true, force: true });
+    await new Promise((r) => setImmediate(r));
   });
 
   void it("GET /mcp establishes SSE stream", async () => {
+    const port = daemon.boundPort!;
     const ac = new AbortController();
     const t = setTimeout(() => ac.abort(), 1000);
-    const res = await fetch(`http://127.0.0.1:${PORT}/mcp`, {
+    const res = await fetch(`http://127.0.0.1:${port}/mcp`, {
       headers: { Authorization: "Bearer test-token" },
       signal: ac.signal,
     });
@@ -58,11 +59,13 @@ void describe("MCP server", () => {
       } catch { /* stream aborted, fine */ }
       assert.ok(body.includes("event: endpoint"));
       assert.ok(body.includes("/mcp?sessionId="));
+      await reader.cancel().catch(() => {});
     }
   });
 
   void it("POST /mcp without sessionId returns 400", async () => {
-    const res = await fetch(`http://127.0.0.1:${PORT}/mcp`, {
+    const port = daemon.boundPort!;
+    const res = await fetch(`http://127.0.0.1:${port}/mcp`, {
       method: "POST",
       headers: {
         Authorization: "Bearer test-token",
@@ -76,7 +79,8 @@ void describe("MCP server", () => {
   });
 
   void it("POST /mcp with unknown sessionId returns 404", async () => {
-    const res = await fetch(`http://127.0.0.1:${PORT}/mcp?sessionId=nonexistent`, {
+    const port = daemon.boundPort!;
+    const res = await fetch(`http://127.0.0.1:${port}/mcp?sessionId=nonexistent`, {
       method: "POST",
       headers: {
         Authorization: "Bearer test-token",

@@ -6,7 +6,7 @@
   ],
   "scripts": {
     "build": "npm -w @prag/core run build",
-    "test": "npm -w @prag/core run test",
+    "test": "npm -w @prag/core run test && npm -w @prag/daemon run test && npm -w @prag/cli run test",
     "lint": "tsc --noEmit"
   },
   "devDependencies": {

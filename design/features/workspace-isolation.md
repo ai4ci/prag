@@ -5,6 +5,8 @@ title: Multi-Project Multi-Tenant Isolation
 status: accepted
 priority: medium
 area: ingestion
+implemented-by:
+  - src://core/src/paths.ts#resolvePragPaths
 ---
 ## Overview
 The engine must independently manage distinct target folder workspaces (e.g. software repositories or personal knowledge bases), assigning static scopes to prevent cross-contamination unless explicitly requested during runtime querying.
