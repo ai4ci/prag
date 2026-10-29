@@ -86,3 +86,23 @@ classDiagram
     issue "0..*" --> "0..1" feature : relates-to
     issue "0..*" --> "0..*" task : blocks
     adr "0..*" --> "0..*" adr : supersedes
+
+    %% @view feature_list
+    %% SELECT uri, title
+    %% FROM feature
+    %% ORDER BY priority DESC
+
+    %% @view adr_list
+    %% SELECT uri, title
+    %% FROM adr
+    %% ORDER BY uri ASC
+
+    %% @view issue_list
+    %% SELECT uri, title
+    %% FROM issue
+    %% ORDER BY priority DESC
+
+    %% @view task_list
+    %% SELECT uri, title
+    %% FROM task
+    %% ORDER BY priority DESC
