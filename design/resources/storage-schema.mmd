@@ -14,9 +14,9 @@ erDiagram
     }
 
     projects {
-        string projectId PK "Deterministic slug or UUID"
-        string rootUri "file:///... or https://..."
-        string name "Human-friendly label"
+        string projectId PK "Absolute normalized root URI, e.g. file:///home/user/Git/prag"
+        string rootUri "Identical to projectId; retained for query readability"
+        string name "Display-only label, e.g. prag; never a key"
         boolean isGit "Whether the folder is a git repository"
         int defaultCooldownSeconds "Default validUntil delta: e.g. 60s for local, null for web"
         string status "ready | indexing | error | paused"
@@ -26,7 +26,7 @@ erDiagram
 
     branch_mapping {
         string branch PK "Git branch name, or '$default' for non-git / web"
-        string projectId PK "Workspace project slug identifier"
+        string projectId PK "Foreign reference to projects.projectId (absolute root URI)"
         string uri PK "Relative path within project or normalized web URI"
         string fileVersionId FK "Foreign reference to file_mapping.fileVersionId"
         datetime updatedAt "Last synchronized timestamp"
@@ -34,7 +34,7 @@ erDiagram
 
     file_mapping {
         string fileVersionId PK "Deterministic: ${uri}::${contentHash}"
-        string projectId "Indexed workspace slug identifier"
+        string projectId "Foreign reference to projects.projectId (absolute root URI)"
         string uri "Indexed disk path or web URI"
         datetime validUntil "Freshness lease / cooldown timestamp; null = permanent"
         string contentHash "Deterministic SHA-1 of complete content"

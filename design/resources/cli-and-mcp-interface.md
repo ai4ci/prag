@@ -189,7 +189,7 @@ Executes hybrid semantic vector + BM25 keyword search scoped to exactly one proj
       },
       "projectId": {
         "type": "string",
-        "description": "Project workspace slug to search. Required: the daemon hosts MCP in-process over HTTP/SSE and has no access to the caller's working directory, so it cannot derive this."
+        "description": "Project root URI to search (the projectId, e.g. file:///home/user/Git/prag). Required: the daemon hosts MCP in-process over HTTP/SSE and has no access to the caller's working directory, so it cannot derive this."
       },
       "branch": {
         "type": "string",

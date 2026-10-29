@@ -14,7 +14,7 @@ Support indexing of non-local content such as online library documentation, API 
 
 ## Architecture & Storage Integration
 Web resources integrate natively into the 4-table LanceDB CAS schema:
-- **`branch_mapping`:** Uses the canonical `$default` branch sentinel with `projectId = 'web'` (or designated custom project slug). `uri` stores the canonical web URL (e.g. `https://docs.lancedb.com/javascript`).
+- **`branch_mapping`:** Uses the canonical `$default` branch sentinel with `projectId` = the site's normalized base URI (e.g. `https://docs.lancedb.com`). `uri` stores the path portion relative to that root (e.g. `javascript`), so the full URL is `projectId + '/' + uri` -- the same convention as local files.
 - **`file_mapping`:** Holds the extracted clean Markdown text of the page.
   - `validUntil = now() + ttl` (default: 1 day, per `defaults.webCooldownSeconds` in `~/.config/prag/config.json`; configurable per source up to multi-day TTLs for slow-changing docs).
   - When `validUntil` is `null`, the page is treated as permanent static documentation (never re-crawled).

@@ -21,6 +21,7 @@ view:
 - [Implement PRAG_ROOT isolation and assertable resolved paths](tasks/test-environment-isolation.md)
 - [Maintain the test fixture corpus and git fixture builder](tasks/test-fixture-corpus.md)
 - [Implement test harness setup/teardown with ephemeral port and no-spawn mode](tasks/test-harness-lifecycle.md)
+- [Spike native addon support under Bun (LanceDB, ONNX, Tree-sitter)](tasks/toolchain-spike-native-addons.md)
 - [Implement hardware acceleration provider selection and air-gap enforcement](tasks/air-gap-hardware-provider.md)
 - [Construct thread-safe background queue with Chokidar debouncing](tasks/daemon-ingestion-queue.md)
 - [Build Tree-sitter and LiteParse parser routing in @prag/daemon](tasks/daemon-parser-router.md)

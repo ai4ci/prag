@@ -28,4 +28,5 @@ view:
 - [Manual Non-Eager Garbage Collection for chunks_pool via CLI and MCP](adrs/ADR-017.md)
 - [Split Search into search_local and search_all Across CLI and MCP](adrs/ADR-018.md)
 - [Hermetic Test Environment - Single Root Override, Ephemeral Port, Injectable Embedder](adrs/ADR-019.md)
+- [Toolchain - Bun Workspaces with tsc, Pending a Native-Addon Spike](adrs/ADR-020.md)
 <!-- loom:links end -->

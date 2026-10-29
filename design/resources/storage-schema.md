@@ -32,9 +32,9 @@ erDiagram
     }
 
     projects {
-        string projectId PK "Deterministic slug or UUID"
-        string rootUri "file:///... or https://..."
-        string name "Human-friendly label"
+        string projectId PK "Absolute normalized root URI, e.g. file:///home/user/Git/prag"
+        string rootUri "Identical to projectId; retained for query readability"
+        string name "Display-only label, e.g. prag; never a key"
         boolean isGit "Whether the folder is a git repository"
         int defaultCooldownSeconds "Default validUntil delta: e.g. 60s for local, null for web"
         string status "ready | indexing | error | paused"
@@ -44,7 +44,7 @@ erDiagram
 
     branch_mapping {
         string branch PK "Git branch name, or '$default' for non-git / web"
-        string projectId PK "Workspace project slug identifier"
+        string projectId PK "Foreign reference to projects.projectId (absolute root URI)"
         string uri PK "Normalized relative path within project or web URI"
         string fileVersionId FK "Foreign reference to file_mapping.fileVersionId"
         datetime updatedAt "Last synchronized timestamp"
@@ -52,7 +52,7 @@ erDiagram
 
     file_mapping {
         string fileVersionId PK "Deterministic: ${uri}::${contentHash}"
-        string projectId "Indexed workspace slug identifier"
+        string projectId "Foreign reference to projects.projectId (absolute root URI)"
         string uri "Indexed disk path or web URI"
         datetime validUntil "Freshness lease / cooldown timestamp; null = permanent"
         string contentHash "Deterministic SHA-1 of complete content"
@@ -99,9 +99,9 @@ Tracks discovered atomic project boundaries, Git repositories, non-git directori
 
 | Field Name | Data Type | Constraints / Attributes | Description |
 |---|---|---|---|
-| `projectId` | `String` | Primary Key, Indexed | Unique slug identifier (e.g. `prag`, `lance-docs`). |
-| `rootUri` | `String` | Unique, Indexed | Root URI: `file:///path/to/repo` or `https://docs.site.com`. |
-| `name` | `String` | Non-Null | Human-readable project label. |
+| `projectId` | `String` | Primary Key, Indexed | **The project's absolute normalized root URI**: `file:///home/user/Git/prag` or `https://docs.site.com`. Not a derived slug -- a slug collides when two checkouts share a basename (`~/work/utils` and `~/personal/utils`), and this is a primary key. |
+| `rootUri` | `String` | Unique, Indexed | Identical to `projectId`. Retained as a named column for query readability; the two are the same value by definition and must never diverge. |
+| `name` | `String` | Non-Null | Human-readable project label (e.g. `prag`), derived from the root basename. **Display only** -- never a key, never used for lookup, free to collide across projects. CLI and MCP output show this, not the full URI. |
 | `isGit` | `Boolean` | Non-Null | `true` if directory contains `.git/`, `false` for plain folders or web. |
 | `defaultCooldownSeconds` | `Integer` | Nullable | Freshness lease delta added to `validUntil` (e.g. 60s for local code, `null` for static web). |
 | `status` | `String` | Non-Null | Ingestion state. `'ready'`: fully indexed and up to date. `'indexing'`: a scan, rebuild, or queued batch is outstanding. `'error'`: last scan failed; see daemon logs. `'paused'`: a `deny` grant or explicit user action has suspended watching. |
@@ -115,7 +115,7 @@ Represents the mutable working state pointer of active branches and non-git work
 |---|---|---|---|
 | `branch` | `String` | Composite PK, Indexed | Git branch name (e.g. `main`, `feature-login`), or `$default` for non-Git local folders and remote web URIs. |
 | `projectId` | `String` | Composite PK, Indexed | Foreign reference to `projects.projectId`. |
-| `uri` | `String` | Composite PK, Indexed | Relative file path within workspace, or normalized web URI. |
+| `uri` | `String` | Composite PK, Indexed | File path **relative to the project root**, or the path portion of a web URI. The absolute URI of any indexed file is therefore `projectId + '/' + uri`, which is what `grants` patterns are matched against. |
 | `fileVersionId` | `String` | Foreign Reference, Non-Null | Deterministic key pointing to active `file_mapping.fileVersionId`. |
 | `updatedAt` | `DateTime` | Non-Null | Timestamp of last synchronization or modification. |
 
@@ -126,7 +126,7 @@ Maps immutable content hashes and file versions to structural metadata and valid
 |---|---|---|---|
 | `fileVersionId` | `String` | Primary Key, Deterministic | Format: `${uri}::${contentHash}` |
 | `projectId` | `String` | Indexed | Foreign reference to `projects.projectId`. |
-| `uri` | `String` | Indexed | Relative disk path or web URI. |
+| `uri` | `String` | Indexed | File path relative to the project root, or the path portion of a web URI. Same convention as `branch_mapping.uri`: absolute URI is `projectId + '/' + uri`. |
 | `validUntil` | `DateTime` | Nullable | Freshness lease / cooldown timestamp. While `now() < validUntil`, reindexing triggers and web rescans are suppressed. `null` = permanent. |
 | `contentHash` | `String` | Indexed, Fixed Length | Deterministic SHA-1 signature of complete indexed content. |
 | `language` | `String` | None | Detected asset category (e.g. `typescript`, `python`, `markdown`, `pdf`, `html`). |

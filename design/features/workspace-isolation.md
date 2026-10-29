@@ -14,7 +14,7 @@ Workspaces are configured and registered via `ProjectWorkspaceConfig`:
 
 ```typescript
 export interface ProjectWorkspaceConfig {
-  id: string;              // Unique project slug identifier
+  id: string;              // projectId: the absolute normalized root URI of the project
   rootUri: string;         // Absolute path to root workspace folder
   isGit: boolean;          // Whether the folder is backed by a Git repository
   filePatterns?: string[]; // Optional glob filters to track or ignore
