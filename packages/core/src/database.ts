@@ -5,6 +5,7 @@
 // and provides transactional batch-upsert helpers.
 
 import lancedb, {
+  Index,
   type Connection,
   type Table,
 } from "@lancedb/lancedb";
@@ -127,8 +128,8 @@ export interface TableDefinition {
   primaryKey: string;
   indexes?: Array<{
     column: string;
-    type: "FTS" | "IVF_PQ";
-    options?: Record<string, unknown>;
+    /** Index config factory: Index.fts() for FTS, Index.ivfPq() for vector. */
+    build: () => Index;
   }>;
 }
 
@@ -162,7 +163,7 @@ export const ALL_TABLES: TableDefinition[] = [
     name: "chunks_pool",
     schema: chunksPoolSchema(),
     primaryKey: "chunkHash",
-    indexes: [{ column: FTS_COLUMN, type: "FTS" }],
+    indexes: [{ column: FTS_COLUMN, build: () => Index.fts() }],
   },
 ];
 
@@ -178,7 +179,7 @@ function vectorPoolDef(dim: number): TableDefinition {
     indexes: [
       {
         column: VECTOR_COLUMN,
-        type: "IVF_PQ",
+        build: () => Index.ivfPq(),
       },
     ],
   };
@@ -293,8 +294,7 @@ export class LanceDbSchema {
       const table = this._tables.get(def.name)!;
       for (const idx of def.indexes) {
         await table.createIndex(idx.column, {
-          indexType: idx.type,
-          ...(idx.options ?? {}),
+          config: idx.build(),
         });
       }
     }
@@ -304,8 +304,7 @@ export class LanceDbSchema {
       const table = this._tables.get(vpDef.name)!;
       for (const idx of vpDef.indexes) {
         await table.createIndex(idx.column, {
-          indexType: idx.type,
-          ...(idx.options ?? {}),
+          config: idx.build(),
         });
       }
     }
