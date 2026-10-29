@@ -31,6 +31,13 @@ export {
 } from "./database.js";
 
 export {
+  hybridSearch,
+  type SearchResult,
+  type SearchFileHit,
+  type SearchChunkHit,
+} from "./search.js";
+
+export {
   FakeEmbeddingProvider,
   getProvider,
   registerProvider,
