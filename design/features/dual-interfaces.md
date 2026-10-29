@@ -50,11 +50,10 @@ export interface SearchHitResult {
   filePath: string;
   projectId: string;
   branch: string;
-  startLine: number;
-  endLine: number;
   snippet: string;
   score: number;
   language: string;
   scopeContext?: string;
 }
 ```
+> **Line-number note:** `startLine`/`endLine` are intentionally absent. After whitespace normalisation, line numbers are not stable enough to be a reliable anchor. Search identifies results at file-level only. The CLI terminal output similarly omits line ranges from hit headers.

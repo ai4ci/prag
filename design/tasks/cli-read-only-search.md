@@ -19,4 +19,4 @@ Implement the short-lived CLI client (@prag/cli) for querying the index and mana
 - Implement daemon lifecycle subcommands: `prag daemon start`, `prag daemon status`, `prag daemon stop` (`POST /shutdown`), `prag daemon token`, and `prag daemon rotate-secret` (ADR-013).
 - Validate `/health`'s `service` and `apiVersion` fields before trusting a discovered port; fail loudly with no automatic port fallback on mismatch (ADR-016). Never compare the daemon's package `version` -- report it in errors only.
 - Exempt `prag daemon stop|status|token|rotate-secret` from the `apiVersion` check (they still require a matching `service`), so the documented recovery path out of a version mismatch is not blocked by that same mismatch (ADR-016).
-- Attach `Authorization: Bearer <token>` (read from `daemon.token`) on every request except `/health` (ADR-013).
+- Attach `Authorization: Bearer <token>` (read from `PRAG_API_KEY` or `daemon.token`) on every request except `/health` (ADR-013).

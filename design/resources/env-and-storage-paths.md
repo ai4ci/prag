@@ -45,8 +45,10 @@ Inside the resolved base paths, `prag` maintains the following structured files:
 ~/.local/state/prag/
 ├── daemon.pid                    # Stores PID of currently running background daemon
 ├── daemon.port                   # Active loopback port number (e.g., 7724)
-└── daemon.token                  # Bearer token for HTTP/MCP auth, mode 0600 (ADR-013)
+└── daemon.token                  # Bearer token for HTTP/MCP auth, mode 0600 (legacy; superseded by PRAG_API_KEY)
 ```
+
+> **Auth precedence:** The daemon authenticates against `PRAG_API_KEY` (default `"guest"`). `daemon.token` is written at startup only when `PRAG_API_KEY` is the default, for backward compatibility with tools that read the file. Setting `PRAG_API_KEY` explicitly skips writing the file; callers should use the env var directly.
 
 ### Path Precedence (ADR-019)
 For each of the four categories, the first match wins:
@@ -87,6 +89,7 @@ Every setting can be specified or overridden using environment variables prefixe
 | `PRAG_HOST` | `string` | `127.0.0.1` | Bind host (strictly local loopback). |
 | `PRAG_EMBEDDING_MODEL`| `string` | `Xenova/bge-small-en-v1.5` | Hugging Face / Transformers.js model identifier for ONNX embeddings. Also accepts `fake:<dim>` (e.g. `fake:384`) to select the deterministic built-in embedder -- offline and instant, but **not** semantically meaningful (ADR-019). |
 | `PRAG_EMBEDDING_DEVICE`| `string` | `cpu` | ONNX runtime device target (`cpu`, `cuda`, `directml`, `wasm`). |
+| `PRAG_API_KEY` | `string` | `guest` | Shared secret for daemon HTTP/MCP auth. All requests except `GET /health` must carry `Authorization: Bearer <PRAG_API_KEY>`. Default `"guest"` provides no security — set to a unique value in production. Future access control hook. |
 | `PRAG_BATCH_SIZE` | `integer` | `64` | Maximum number of text chunks per ONNX inference batch. |
 | `PRAG_DEBOUNCE_MS` | `integer` | `500` | Ingestion queue debounce window for filesystem change events. |
 | `PRAG_WORKER_POOL_SIZE` | `integer` | `1` | Parse/chunk/hash worker threads. Embedding and all database writes stay on the main thread regardless (ADR-021). |

@@ -36,8 +36,8 @@ erDiagram
         string rootUri "Identical to projectId; retained for query readability"
         string name "Display-only label, e.g. prag; never a key"
         boolean isGit "Whether the folder is a git repository"
-        int defaultCooldownSeconds "Default validUntil delta: e.g. 60s for local, null for web"
-        string status "ready | indexing | error | paused"
+        int defaultCooldownSeconds "Per-project TTL override (null = use type-specific default from config: localCooldownSeconds or webCooldownSeconds)"
+        string status "idle | indexing | error | paused"
         datetime registeredAt "Initial registration timestamp"
         datetime lastSyncedAt "Last completed scan timestamp"
     }
@@ -68,6 +68,7 @@ erDiagram
     chunks_pool {
         string chunkHash PK "Deterministic SHA-1 signature of the whole normalized chunk"
         string text "Raw source code slice or layout paragraph text (BM25 FTS indexed)"
+        string scopeContext "Enclosing scope annotation e.g. function/class name (nullable)"
     }
 
     vector_pool {
@@ -103,8 +104,8 @@ Tracks discovered atomic project boundaries, Git repositories, non-git directori
 | `rootUri` | `String` | Unique, Indexed | Identical to `projectId`. Retained as a named column for query readability; the two are the same value by definition and must never diverge. |
 | `name` | `String` | Non-Null | Human-readable project label (e.g. `prag`), derived from the root basename. **Display only** -- never a key, never used for lookup, free to collide across projects. CLI and MCP output show this, not the full URI. |
 | `isGit` | `Boolean` | Non-Null | `true` if directory contains `.git/`, `false` for plain folders or web. |
-| `defaultCooldownSeconds` | `Integer` | Nullable | Freshness lease delta added to `validUntil` (e.g. 60s for local code, `null` for static web). |
-| `status` | `String` | Non-Null | Ingestion state. `'ready'`: fully indexed and up to date. `'indexing'`: a scan, rebuild, or queued batch is outstanding. `'error'`: last scan failed; see daemon logs. `'paused'`: a `deny` grant or explicit user action has suspended watching. |
+| `defaultCooldownSeconds` | `Integer` | Nullable | Per-project TTL override. When set, overrides the type-specific default from config (`localCooldownSeconds` or `webCooldownSeconds`). `null` = inherit from config. |
+| `status` | `String` | Non-Null | Ingestion state. `'idle'`: fully indexed and up to date. `'indexing'`: a scan, rebuild, or queued batch is outstanding. `'error'`: last scan failed; see daemon logs. `'paused'`: a `deny` grant or explicit user action has suspended watching. |
 | `registeredAt` | `DateTime` | Non-Null | Initial registration timestamp. |
 | `lastSyncedAt` | `DateTime` | Nullable | Timestamp of last full scan/reconciliation. |
 
@@ -147,6 +148,7 @@ Represents the deduplicated global pool of structural chunk content. This is the
 |---|---|---|---|
 | `chunkHash` | `String` | Primary Key, Fixed Length | Deterministic SHA-1 signature of the whole whitespace-normalized chunk (ADR-010), independent of chunk size. |
 | `text` | `String` | Non-Null | Raw text code slice or layout paragraph block, complete and unsplit (indexed with BM25 FTS). |
+| `scopeContext` | `String` | Nullable | Enclosing structural scope annotation for embedding prefix (e.g. the function or class name that contains this chunk). Used to prepend scope context at embedding time for better semantic search. |
 
 ### 7. `vector_pool`
 Holds the dense embeddings derived from each chunk. A chunk that fits the model has exactly one row here; an oversized chunk has one row per sliding window (ADR-014).

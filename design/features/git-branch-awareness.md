@@ -23,7 +23,13 @@ Governed by the Content-Addressable Storage (CAS) and branch-pointer model defin
 - `chunks_pool`: Deduplicated global pool storing `chunkHash` (SHA-1) and the raw `text` block (BM25 FTS target).
 - `vector_pool`: Dense embeddings keyed by `(chunkHash, unitIndex)` -- one row per vectorised unit, so an oversized chunk has several (ADR-014).
 
-## Git Churn Behavior & Branch Pointer Resolution
+## Branch-Switch Detection via Chokidar
+Branch switches are not detected by running `git branch --show-current` on a timer. Instead, the daemon's Chokidar watcher monitors the entire Git repository at file level. When `git checkout` or `git switch` mutates the working tree, Chokidar emits `change` events for every affected file. The ingestion queue processes these events as ordinary mutations:
+- Files whose content matches an existing `contentHash` (common across branches) produce no new storage writes — only `branch_mapping` pointers shift.
+- Files with new content create new `fileVersionId`, `chunk_mapping`, and chunk entries as normal.
+- Deleted files (removed by the branch switch) trigger `unlink` handling that removes their `branch_mapping` pointer.
+
+The branch name itself is resolved lazily from `.git/HEAD` at query time (by the CLI for `search-local`, or from the `branch` parameter on MCP `search_local`). The daemon never actively tracks "which branch is checked out" — it only reacts to the file-level consequences of a switch. This avoids polling overhead, stale branch-name caches, and the edge cases of detached HEAD or in-progress rebases.
 - **Branch Switch:** When branching or checking out a new branch, files identical to the base branch share identical `contentHash` values. Writing to `branch_mapping` only links `(newBranch, projectId, uri)` to existing `fileVersionId` records. Zero re-parsing and zero vector computation occur.
 - **File Modification:** When a file changes on a branch, a new `fileVersionId` is created in `file_mapping`, chunks are added to `chunk_mapping`, `chunks_pool` and `vector_pool`, and the single pointer in `branch_mapping` is updated. Other branches continue pointing to their respective historical `fileVersionId`.
 - **File Deletion:** When a file is unlinked/deleted on a branch, its row in `branch_mapping` is deleted. Historical versions on other branches remain untouched.

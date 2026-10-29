@@ -30,6 +30,8 @@ export interface UriGrant {
 3. **Deny Breaks Ties:** If allow and deny match at identical length/specificity, `deny` takes precedence.
 4. **Built-in Global Denials:** Evaluated automatically for vendor noise (e.g. `**/node_modules/**`, `**/.git/**`, `**/dist/**`, `**/build/**`, `**/.env*`, `**/__pycache__/**`).
 
+Grant evaluation works uniformly over `file:///` and `https://` URI schemes. A web project rooted at `https://docs.lancedb.com` evaluates grants against patterns like `https://docs.lancedb.com/**` using the same longest-prefix logic — no separate policy dimension for remote content.
+
 ## Project Discovery & Scoping (`projects` Table)
 Within the allowed URI space, the daemon discovers and registers autonomous **Projects**:
 - **Git Project:** Any directory containing `.git/`. Forms an atomic boundary with independent Git branch tracking.
@@ -50,7 +52,7 @@ A grant over a container directory can register hundreds of projects. Before tha
 3. Everything excluded is **counted and reported** by reason (`tooLarge`, `binary`, `denied`) through `GET /projects` and `prag status`. A user whose file is missing from results must be able to tell a deliberate limit from a bug.
 4. `prag pause <project>` / `prag resume <project>` set and clear `projects.status = 'paused'`, stopping ingestion without discarding grants or indexed data.
 
-### Running `prag deny <uri>` / `prag remove <uri>`
+### Running `prag deny <uri>`
 1. Inserts a `deny` rule for `<normalized_uri>/**` into `grants`.
 2. Purges any matching project metadata, branch pointers, and chunks from the search index.
 3. Notifies the live Chokidar watcher to un-watch the subtree immediately.

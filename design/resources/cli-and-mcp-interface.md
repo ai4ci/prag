@@ -59,7 +59,7 @@ prag search-all <query> [options]
 $ prag search-local "handle file debounce in daemon" -n 2
 
 [Hit 1] (score: 0.0321) @prag/daemon (branch: main)
-File: packages/daemon/src/queue/ingestion-queue.ts:42-88 (typescript)
+File: packages/daemon/src/queue/ingestion-queue.ts (typescript)
 --------------------------------------------------------------------------------
 42 | export class IngestionQueue {
 43 |   private dirtySet: Set<string> = new Set();
@@ -67,7 +67,7 @@ File: packages/daemon/src/queue/ingestion-queue.ts:42-88 (typescript)
 88 | }
 
 [Hit 2] (score: 0.0298) @prag/core (branch: main)
-File: design/features/background-worker-queue.md:25-45 (markdown)
+File: design/features/background-worker-queue.md (markdown)
 ...
 ```
 
@@ -147,7 +147,7 @@ Manual control over the persistent daemon service:
 - `prag daemon stop`: Sends `POST /shutdown` to terminate gracefully.
 - `prag daemon status`: Prints PID, port, memory RSS, and uptime.
 - `prag daemon token`: Prints the current bearer token (for pasting into an MCP host's `headers` config).
-- `prag daemon rotate-secret`: Regenerates `daemon.token`, invalidating the previous one immediately.
+- `prag daemon rotate-secret`: Regenerates the shared secret (updates `PRAG_API_KEY` or `daemon.token`), invalidating the previous one immediately.
 
 ---
 
@@ -162,13 +162,13 @@ The MCP server is hosted **directly inside `@prag/daemon`** at the `/mcp` route 
     "prag": {
       "url": "http://127.0.0.1:7724/mcp",
       "headers": {
-        "Authorization": "Bearer <token from `prag daemon token`>"
+        "Authorization": "Bearer <PRAG_API_KEY from env or `prag daemon token`>"
       }
     }
   }
 }
 ```
-All endpoints except `GET /health` require this bearer token (ADR-013); the CLI attaches it automatically by reading `daemon.token` from the runtime directory.
+All endpoints except `GET /health` require `Authorization: Bearer <PRAG_API_KEY>` (see ADR-013); the CLI attaches it automatically by reading `PRAG_API_KEY` or falling back to the legacy `daemon.token` file from the runtime directory.
 
 ### In-Process Architecture
 Because the MCP server runs inside the daemon process:
@@ -262,7 +262,9 @@ Executes the same hybrid search, unscoped across every registered project (ADR-0
 ---
 
 ### Tool 2: `get_indexing_status`
-Enables an agent to determine if a workspace or URI is indexed, its current branch, and chunk count.
+Enables an agent to determine if a URI is indexed, its current branch, and chunk count.
+
+> **`uri` is required** for MCP callers since the in-daemon MCP server has no working directory to resolve. The CLI's `prag status [uri]` makes it optional (infers from `cwd`).
 
 #### JSON-Schema Input Contract:
 ```json
@@ -274,9 +276,10 @@ Enables an agent to determine if a workspace or URI is indexed, its current bran
     "properties": {
       "uri": {
         "type": "string",
-        "description": "The file URI (file:///...) or web URL to inspect. If omitted, checks current workspace."
+        "description": "The file URI (file:///...) or web URL to inspect."
       }
-    }
+    },
+    "required": ["uri"]
   }
 }
 ```
@@ -352,6 +355,40 @@ Removes stale `branch_mapping` pointers and, only if explicitly requested, garba
         "default": false
       }
     }
+  }
+}
+```
+
+---
+
+### Tool 6: `list_grants`
+Lists all active allow and deny URI grant rules — the MCP-side equivalent of `prag grants`.
+
+#### JSON-Schema Input Contract:
+```json
+{
+  "name": "list_grants",
+  "description": "Lists all active allow and deny grant rules in the URI policy set.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {}
+  }
+}
+```
+
+---
+
+### Tool 7: `list_projects`
+Lists all registered project containers, their root URIs, and ingestion status — the MCP-side equivalent of `prag projects`.
+
+#### JSON-Schema Input Contract:
+```json
+{
+  "name": "list_projects",
+  "description": "Lists all registered project containers and their indexing status.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {}
   }
 }
 ```

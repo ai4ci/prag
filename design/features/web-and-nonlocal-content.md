@@ -13,7 +13,15 @@ guided-by:
 Support indexing of non-local content such as online library documentation, API references, and web pages directly via URI, with automated re-crawling driven by TTL freshness leases (`validUntil`).
 
 ## Architecture & Storage Integration
-Web resources integrate natively into the 4-table LanceDB CAS schema:
+Web resources integrate natively into the shared URI grants table and the LanceDB CAS schema:
+
+### Grant Evaluation
+Web URIs are governed by the same `grants` table as local file URIs (see `project-registry-and-status.md`). When a user runs `prag watch https://docs.lancedb.com/**`, the daemon inserts an `allow` grant with pattern `https://docs.lancedb.com/**`. The same longest-prefix matching and deny-default semantics apply:
+- `prag deny https://docs.lancedb.com/private/**` overrides a broader allow.
+- Built-in global denials (`**/node_modules/**`, etc.) cover no https paths in practice but are evaluated uniformly.
+- Web projects are discovered and tracked in `projects` with `isGit = false` and `status = 'idle'`.
+
+### Storage
 - **`branch_mapping`:** Uses the canonical `$default` branch sentinel with `projectId` = the site's normalized base URI (e.g. `https://docs.lancedb.com`). `uri` stores the path portion relative to that root (e.g. `javascript`), so the full URL is `projectId + '/' + uri` -- the same convention as local files.
 - **`file_mapping`:** Holds the extracted clean Markdown text of the page.
   - `validUntil = now() + ttl` (default: 1 day, per `defaults.webCooldownSeconds` in `~/.config/prag/config.json`; configurable per source up to multi-day TTLs for slow-changing docs).

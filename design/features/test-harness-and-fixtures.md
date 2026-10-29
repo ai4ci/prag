@@ -27,7 +27,7 @@ setup:    mkdtemp -> PRAG_ROOT=<tmp> PRAG_PORT=0 PRAG_NO_SPAWN=1 PRAG_EMBEDDING_
           start @prag/daemon
           poll GET /health until status=ok
           ASSERT health.root === <tmp>          <-- guard before any destructive call
-          read port from <tmp>/state/daemon.port, token from <tmp>/state/daemon.token
+          read port from <tmp>/state/daemon.port, token from $PRAG_API_KEY or <tmp>/state/daemon.token
 exercise: POST /grants, write fixture files, POST /sync (drain barrier), assert
 teardown: POST /shutdown, wait for exit, rm -rf <tmp>
 ```

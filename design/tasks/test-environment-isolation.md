@@ -19,7 +19,7 @@ This blocks every other test task. Until it exists, any test that reaches `prag 
 ## Requirements
 - Implement `PRAG_ROOT` in `@prag/core`'s path resolution: when set, derive `dataDir = <root>/data`, `configDir = <root>/config`, `runDir = <root>/state`, `logDir = <root>/state/logs`.
 - Precedence, in order: an explicitly set `PRAG_DATA_DIR`/`PRAG_CONFIG_DIR`/`PRAG_RUN_DIR`/`PRAG_LOG_DIR` wins; otherwise the `PRAG_ROOT`-derived path; otherwise the XDG/platform default. When `PRAG_ROOT` is set, an unset category must **never** fall back to XDG.
-- Create the derived directories on demand with the same permissions as the XDG paths (`daemon.token` stays `0600`, ADR-013).
+- Create the derived directories on demand with the same permissions as the XDG paths (`daemon.token` legacy file stays `0600`, ADR-013).
 - Add `root`, `dataDir`, `configDir` and `runDir` to the `GET /health` response so a harness can assert where the daemon is actually rooted. These are paths, not content — `/health` stays unauthenticated and still exposes no indexed data or grants.
 - Update `env-and-storage-paths.md` with `PRAG_ROOT` and the precedence rules.
 
