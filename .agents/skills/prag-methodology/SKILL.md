@@ -97,10 +97,10 @@ Ensure zero errors reported in `design/VALIDATION.md`.
 
 ## 5. Navigational Indexes
 
-`design/INDEX.md`, `ADRS.md`, `FEATURES.md`, `ISSUES.md` and `TASKS.md` use
-inline views, not the legacy `view:` frontmatter. The queries live in
-`design/document-model.mmd` as `%% @view <name>` annotations
-(`feature_list`, `adr_list`, `issue_list`, `task_list`), and each file carries:
+`design/INDEX.md` is the single navigation page; it embeds four inline views
+(one per class). The queries live in `design/document-model.mmd` as
+`%% @view <name>` annotations (`feature_list`, `adr_list`, `issue_list`,
+`task_list`); each section carries a marker pair like:
 
 ```markdown
 <!-- loom view: feature_list -->
