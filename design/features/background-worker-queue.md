@@ -6,17 +6,17 @@ status: accepted
 priority: high
 area: daemon
 guided-by:
-  - adr://ADR-005.md
-  - adr://ADR-008.md
-  - adr://ADR-013.md
-  - adr://ADR-015.md
-  - adr://ADR-016.md
-  - adr://ADR-021.md
-  - adr://ADR-023.md
+  - adr:ADR-005.md
+  - adr:ADR-008.md
+  - adr:ADR-013.md
+  - adr:ADR-015.md
+  - adr:ADR-016.md
+  - adr:ADR-021.md
+  - adr:ADR-023.md
 implemented-by:
-  - src://daemon/src/worker-pool.ts#WorkerPool
-  - src://daemon/src/ingestion-queue.ts#IngestionQueue
-  - src://daemon/src/ingestion-worker.ts
+  - src:daemon/src/worker-pool.ts#WorkerPool
+  - src:daemon/src/ingestion-queue.ts#IngestionQueue
+  - src:daemon/src/ingestion-worker.ts
 ---
 ## Overview
 File-system changes (file mutations, additions, or deletions) are captured asynchronously, queued, and debounced with cooldown leases to ensure eventual consistency without CPU/GPU thrashing during active editing. The daemon serves as the central manager for all LanceDB operations, ONNX embedding generation, and directory monitoring.

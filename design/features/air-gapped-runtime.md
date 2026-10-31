@@ -6,8 +6,8 @@ status: accepted
 priority: high
 area: core
 guided-by:
-  - adr://ADR-006.md
-  - adr://ADR-012.md
+  - adr:ADR-006.md
+  - adr:ADR-012.md
 ---
 ## Overview
 Self-hosted, local-first runtime with zero telemetry. By default (no web URIs registered) all embeddings, parsing, and storage remain strictly inside the local workstation hardware perimeter and zero outbound network calls occur. When web URIs are granted, outbound fetches use a self-hosted Firecrawl instance or a headless-fetcher fallback — never an external LLM or cloud indexing service (see ADR-012 for the precise scope of this guarantee).

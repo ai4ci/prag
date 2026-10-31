@@ -1,9 +1,9 @@
-%% @path feature design/features
-%% @path task design/tasks
-%% @path issue design/issues
-%% @path adr design/adrs
-%% @path src /packages
-%% @path resource design/resources
+%% @prefix feature: <repo:design/features/> .
+%% @prefix task: <repo:design/tasks/> .
+%% @prefix issue: <repo:design/issues/> .
+%% @prefix adr: <repo:design/adrs/> .
+%% @prefix src: <repo:packages/> .
+%% @prefix resource: <repo:design/resources/> .
 
 classDiagram
     %% Core lifecycle status for features from conception to completion
@@ -88,21 +88,21 @@ classDiagram
     adr "0..*" --> "0..*" adr : supersedes
 
     %% @view feature_list
-    %% SELECT uri, title
+    %% SELECT uri
     %% FROM feature
     %% ORDER BY priority DESC
 
     %% @view adr_list
-    %% SELECT uri, title
+    %% SELECT uri
     %% FROM adr
     %% ORDER BY uri ASC
 
     %% @view issue_list
-    %% SELECT uri, title
+    %% SELECT uri
     %% FROM issue
     %% ORDER BY priority DESC
 
     %% @view task_list
-    %% SELECT uri, title
+    %% SELECT uri
     %% FROM task
     %% ORDER BY priority DESC

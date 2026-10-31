@@ -37,7 +37,7 @@ Whenever the CLI finds something already listening on the configured port, it va
 ### `prag search-local <query>` / `prag search-all <query>` (ADR-018)
 Executes hybrid semantic vector + BM25 full-text search against indexed content. `search-local` (the default/primary command for day-to-day use) searches exactly one project, resolving `projectId` from the current working directory the same way `--branch` is auto-detected. `search-all` searches every registered project and accepts no project option.
 
-The split is for clarity, not access control: `search-local` with an explicit `--project` can reach any indexed project, so hiding `search-all` would restrict nothing. Per-caller restriction of results is tracked separately as `issue://search-result-permission-grants.md`.
+The split is for clarity, not access control: `search-local` with an explicit `--project` can reach any indexed project, so hiding `search-all` would restrict nothing. Per-caller restriction of results is tracked separately as `issue:search-result-permission-grants.md`.
 
 ```bash
 prag search-local <query> [options]

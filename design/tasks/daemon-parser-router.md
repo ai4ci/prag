@@ -5,10 +5,10 @@ title: Build Tree-sitter and LiteParse parser routing in @prag/daemon
 status: todo
 priority: medium
 relates-to:
-  - feature://syntax-aware-chunking.md
+  - feature:syntax-aware-chunking.md
 addressed-by:
-  - src://core/src/chunker.ts#chunkFile
-  - src://core/src/chunker.ts#detectLanguageFromPath
+  - src:core/src/chunker.ts#chunkFile
+  - src:core/src/chunker.ts#detectLanguageFromPath
 ---
 ## Description
 Implement the parser router in @prag/daemon dispatching code files to Tree-sitter and documents to LiteParse.

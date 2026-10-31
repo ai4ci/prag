@@ -5,11 +5,11 @@ title: Implement test harness setup/teardown with ephemeral port and no-spawn mo
 status: todo
 priority: high
 relates-to:
-  - feature://test-harness-and-fixtures.md
+  - feature:test-harness-and-fixtures.md
 addressed-by:
-  - src://daemon/src/test-harness.ts#startTestDaemon
-  - src://daemon/src/test-harness.ts#stopTestDaemon
-  - src://daemon/src/test-harness.ts#TestDaemonInstance
+  - src:daemon/src/test-harness.ts#startTestDaemon
+  - src:daemon/src/test-harness.ts#stopTestDaemon
+  - src:daemon/src/test-harness.ts#TestDaemonInstance
 ---
 ## Objective
 Provide the shared setup/teardown harness every test suite uses, plus the two daemon-lifecycle controls it depends on (ADR-019).

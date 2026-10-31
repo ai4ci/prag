@@ -5,10 +5,10 @@ title: Implement discovery filters, skip reporting and watch admission control
 status: todo
 priority: high
 relates-to:
-  - feature://project-registry-and-status.md
+  - feature:project-registry-and-status.md
 addressed-by:
-  - src://daemon/src/ingestion-queue.ts#IngestionQueue
-  - src://daemon/src/ingestion-queue.ts#IngestionConfig
+  - src:daemon/src/ingestion-queue.ts#IngestionQueue
+  - src:daemon/src/ingestion-queue.ts#IngestionConfig
 ---
 ## Objective
 Implement ADR-023 so a single `prag watch ~/Git` cannot silently commit the machine to hours of indexing, and so anything excluded is visibly excluded.

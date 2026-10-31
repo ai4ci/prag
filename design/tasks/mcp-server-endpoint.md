@@ -5,9 +5,9 @@ title: Expose native HTTP/SSE Model Context Protocol (MCP) server endpoint in da
 status: todo
 priority: medium
 relates-to:
-  - feature://dual-interfaces.md
+  - feature:dual-interfaces.md
 addressed-by:
-  - src://daemon/src/mcp-server.ts#McpHandler
+  - src:daemon/src/mcp-server.ts#McpHandler
 ---
 ## Objective
 Expose the Model Context Protocol (MCP) server directly inside `@prag/daemon` on the loopback HTTP/SSE endpoint `/mcp` (e.g. `http://127.0.0.1:7724/mcp`).

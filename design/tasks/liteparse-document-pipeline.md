@@ -5,7 +5,7 @@ title: Implement LiteParse layout-preserving PDF/DOCX to Markdown pipeline
 status: todo
 priority: medium
 relates-to:
-  - feature://layout-preserving-chunking.md
+  - feature:layout-preserving-chunking.md
 ---
 ## Objective
 Implement the dedicated layout-preserving document ingestion pipeline for binary documents (PDF, DOCX) using `@llamaindex/liteparse`, per `layout-preserving-chunking.md`.

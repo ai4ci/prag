@@ -6,7 +6,7 @@ status: accepted
 priority: high
 area: ingestion
 guided-by:
-  - adr://ADR-003.md
+  - adr:ADR-003.md
 ---
 ## Overview
 The system must process structured programming source code files (`.ts`, `.js`, `.py`, `.r`, etc.), prose markdown (`.md`, `.txt`), and rich text/binary layout documents (`.pdf`, `.docx`).

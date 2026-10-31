@@ -5,7 +5,7 @@ title: Implement branch_mapping table schema and branch pruning lifecycle
 status: todo
 priority: high
 relates-to:
-  - feature://git-branch-awareness.md
+  - feature:git-branch-awareness.md
 ---
 ## Description
 Implement the 4th table in the LanceDB schema: `branch_mapping`.

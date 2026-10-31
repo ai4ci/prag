@@ -5,10 +5,10 @@ title: Implement short-lived CLI client with lazy daemon spawning and HTTP queri
 status: todo
 priority: high
 relates-to:
-  - feature://dual-interfaces.md
+  - feature:dual-interfaces.md
 addressed-by:
-  - src://cli/src/daemon-client.ts#DaemonClient
-  - src://cli/src/main.ts#main
+  - src:cli/src/daemon-client.ts#DaemonClient
+  - src:cli/src/main.ts#main
 ---
 ## Description
 Implement the short-lived CLI client (@prag/cli) for querying the index and managing the daemon.

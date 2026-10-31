@@ -5,7 +5,7 @@ title: Implement hardware acceleration provider selection and air-gap enforcemen
 status: todo
 priority: medium
 relates-to:
-  - feature://air-gapped-runtime.md
+  - feature:air-gapped-runtime.md
 ---
 ## Objective
 Implement hardware-configurable acceleration provider selection for the local ONNX embedding runtime, and make the air-gap guarantee (ADR-012) independently verifiable.

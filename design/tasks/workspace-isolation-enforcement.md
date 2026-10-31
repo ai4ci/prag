@@ -5,7 +5,7 @@ title: Enforce project-scoped query and storage isolation across workspaces
 status: todo
 priority: medium
 relates-to:
-  - feature://workspace-isolation.md
+  - feature:workspace-isolation.md
 ---
 ## Objective
 Verify and enforce multi-project isolation guarantees described in `workspace-isolation.md` beyond the basic `projectId` column.

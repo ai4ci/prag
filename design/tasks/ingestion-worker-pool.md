@@ -5,15 +5,15 @@ title: Implement the ingestion worker pool with main-thread embedding and writes
 status: todo
 priority: high
 relates-to:
-  - feature://background-worker-queue.md
+  - feature:background-worker-queue.md
 blocks:
-  - task://daemon-ingestion-queue.md
+  - task:daemon-ingestion-queue.md
 addressed-by:
-  - src://daemon/src/worker-pool.ts#WorkerPool
-  - src://daemon/src/worker-pool.ts#ProcessResult
-  - src://daemon/src/ingestion-worker.ts#WorkerInput
-  - src://daemon/src/ingestion-worker.ts#WorkerOutput
-  - src://daemon/src/worker-pool.test.ts
+  - src:daemon/src/worker-pool.ts#WorkerPool
+  - src:daemon/src/worker-pool.ts#ProcessResult
+  - src:daemon/src/ingestion-worker.ts#WorkerInput
+  - src:daemon/src/ingestion-worker.ts#WorkerOutput
+  - src:daemon/src/worker-pool.test.ts
 ---
 ## Objective
 Implement the concurrency split of ADR-021 so synchronous parsing cannot stall the `/search` request path.

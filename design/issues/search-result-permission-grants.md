@@ -5,7 +5,7 @@ title: Per-caller permission grants for search results
 status: open
 priority: low
 relates-to:
-  - feature://dual-interfaces.md
+  - feature:dual-interfaces.md
 ---
 ## Problem
 ADR-018 splits search into `search_local` (one project) and `search_all` (every project). That split is a usability and clarity boundary, and it was initially described as also giving a seam for restricting a caller's reach — "expose only `search_local` to an untrusted agent."

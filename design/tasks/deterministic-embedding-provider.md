@@ -5,16 +5,16 @@ title: Implement injectable fake embedding provider (fake:<dim>)
 status: todo
 priority: high
 relates-to:
-  - feature://test-harness-and-fixtures.md
+  - feature:test-harness-and-fixtures.md
 blocks:
-  - task://test-harness-lifecycle.md
+  - task:test-harness-lifecycle.md
 addressed-by:
-  - src://core/src/embedding.ts#FakeEmbeddingProvider
-  - src://core/src/embedding.ts#EmbeddingProvider
-  - src://core/src/embedding.ts#EmbeddingSidecar
-  - src://core/src/embedding.ts#registerProvider
-  - src://core/src/embedding.ts#getProvider
-  - src://core/src/embedding.ts#parseFakeDim
+  - src:core/src/embedding.ts#FakeEmbeddingProvider
+  - src:core/src/embedding.ts#EmbeddingProvider
+  - src:core/src/embedding.ts#EmbeddingSidecar
+  - src:core/src/embedding.ts#registerProvider
+  - src:core/src/embedding.ts#getProvider
+  - src:core/src/embedding.ts#parseFakeDim
 ---
 ## Objective
 Give the embedding pipeline a seam so tests can run offline, instantly, and deterministically (ADR-019). Without it every test that indexes anything needs ~130MB of ONNX weights (ADR-006), pays model-load time, and asserts against ranking that moves between model revisions.

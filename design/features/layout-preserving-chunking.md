@@ -6,8 +6,8 @@ status: accepted
 priority: medium
 area: ingestion
 guided-by:
-  - adr://ADR-003.md
-  - adr://ADR-014.md
+  - adr:ADR-003.md
+  - adr:ADR-014.md
 ---
 ## Overview
 Binary documentation layouts (such as PDFs and DOCX) must be decomposed offline while preserving tables, lists, headers, and relative section hierarchy.

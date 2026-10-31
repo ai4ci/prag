@@ -5,7 +5,7 @@ title: Implement pinned embedding model detection and prag reembed rebuild
 status: todo
 priority: medium
 relates-to:
-  - feature://background-worker-queue.md
+  - feature:background-worker-queue.md
 ---
 ## Objective
 Implement the pinned-embedding-model detection and explicit rebuild workflow described in ADR-015.

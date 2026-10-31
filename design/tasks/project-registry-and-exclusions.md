@@ -5,7 +5,7 @@ title: Implement grants and projects tables with allow/deny evaluation and Choki
 status: todo
 priority: high
 relates-to:
-  - feature://project-registry-and-status.md
+  - feature:project-registry-and-status.md
 ---
 ## Description
 Implement the `grants` and `projects` tables in LanceDB, along with allow/deny evaluation and Chokidar watcher filter integration.

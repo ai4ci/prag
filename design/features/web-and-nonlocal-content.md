@@ -6,8 +6,8 @@ status: accepted
 priority: medium
 area: ingestion
 guided-by:
-  - adr://ADR-008.md
-  - adr://ADR-012.md
+  - adr:ADR-008.md
+  - adr:ADR-012.md
 ---
 ## Overview
 Support indexing of non-local content such as online library documentation, API references, and web pages directly via URI, with automated re-crawling driven by TTL freshness leases (`validUntil`).

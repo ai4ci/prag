@@ -5,19 +5,19 @@ title: Implement hybrid search with LanceDB BM25 FTS and Reciprocal Rank Fusion
 status: todo
 priority: high
 relates-to:
-  - feature://dual-interfaces.md
+  - feature:dual-interfaces.md
 addressed-by:
-  - src://core/src/search.ts#hybridSearch
-  - src://core/src/search.ts#SearchResult
-  - src://core/src/search.ts#ftsSearch
-  - src://core/src/search.ts#vectorSearch
-  - src://core/src/search.ts#fuseResults
-  - src://core/src/search.ts#mapToFiles
-  - src://core/src/search.ts#SearchChunkHit
-  - src://core/src/search.ts#SearchFileHit
-  - src://cli/src/daemon-client.ts#SearchOptions
-  - src://cli/src/daemon-client.ts#SearchHit
-  - src://cli/src/daemon-client.ts#SearchResult
+  - src:core/src/search.ts#hybridSearch
+  - src:core/src/search.ts#SearchResult
+  - src:core/src/search.ts#ftsSearch
+  - src:core/src/search.ts#vectorSearch
+  - src:core/src/search.ts#fuseResults
+  - src:core/src/search.ts#mapToFiles
+  - src:core/src/search.ts#SearchChunkHit
+  - src:core/src/search.ts#SearchFileHit
+  - src:cli/src/daemon-client.ts#SearchOptions
+  - src:cli/src/daemon-client.ts#SearchHit
+  - src:cli/src/daemon-client.ts#SearchResult
 ---
 ## Description
 Implement hybrid search in @prag/daemon combining dense vector embeddings and BM25 full-text search.

@@ -5,7 +5,7 @@ title: Implement Firecrawl-backed web ingestion with self-hosted endpoint suppor
 status: todo
 priority: medium
 relates-to:
-  - feature://web-and-nonlocal-content.md
+  - feature:web-and-nonlocal-content.md
 ---
 ## Objective
 Implement the web/non-local content ingestion pipeline described in `web-and-nonlocal-content.md`, consistent with the self-hosted-by-default scope in ADR-012.

@@ -5,14 +5,14 @@ title: Implement the unified error envelope, status mapping and exit codes
 status: todo
 priority: high
 relates-to:
-  - feature://dual-interfaces.md
+  - feature:dual-interfaces.md
 blocks:
-  - task://test-harness-lifecycle.md
+  - task:test-harness-lifecycle.md
 addressed-by:
-  - src://cli/src/daemon-client.ts#DaemonError
-  - src://cli/src/daemon-client.ts#ExitCode
-  - src://cli/src/daemon-client.ts#ErrorEnvelope
-  - src://cli/src/daemon-client.ts#parseError
+  - src:cli/src/daemon-client.ts#DaemonError
+  - src:cli/src/daemon-client.ts#ExitCode
+  - src:cli/src/daemon-client.ts#ErrorEnvelope
+  - src:cli/src/daemon-client.ts#parseError
 ---
 ## Objective
 Implement ADR-022 so failures have one shape across the HTTP API, the CLI and the MCP tools, and so tests assert on a stable `code` rather than on message text.

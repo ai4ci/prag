@@ -5,9 +5,9 @@ title: Make POST /sync a true drain barrier
 status: todo
 priority: high
 relates-to:
-  - feature://test-harness-and-fixtures.md
+  - feature:test-harness-and-fixtures.md
 blocks:
-  - task://test-harness-lifecycle.md
+  - task:test-harness-lifecycle.md
 ---
 ## Objective
 Define and implement `POST /sync` as a drain barrier so tests can assert on indexed state without racing the ingestion queue (ADR-019). The endpoint already exists; its completion semantics were never specified, and "returns `{ synced: true }`" is not enough to build an assertion on.

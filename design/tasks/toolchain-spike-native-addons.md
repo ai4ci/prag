@@ -5,10 +5,10 @@ title: Spike native addon support under Bun (LanceDB, ONNX, Tree-sitter)
 status: todo
 priority: high
 relates-to:
-  - feature://test-harness-and-fixtures.md
+  - feature:test-harness-and-fixtures.md
 blocks:
-  - task://core-database-schemas.md
-  - task://test-environment-isolation.md
+  - task:core-database-schemas.md
+  - task:test-environment-isolation.md
 ---
 ## Objective
 Prove that the three native NAPI modules `prag` depends on actually **run** under Bun before any implementation is written against that assumption (ADR-020). Bun's N-API support is good but incomplete, and these three are exactly the kind of module that exposes the gaps. Finding a gap after the daemon exists is expensive; finding it in a throwaway script is an afternoon.

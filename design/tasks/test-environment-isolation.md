@@ -5,16 +5,16 @@ title: Implement PRAG_ROOT isolation and assertable resolved paths
 status: todo
 priority: high
 relates-to:
-  - feature://test-harness-and-fixtures.md
+  - feature:test-harness-and-fixtures.md
 blocks:
-  - task://test-harness-lifecycle.md
-  - task://test-fixture-corpus.md
-  - task://deterministic-embedding-provider.md
+  - task:test-harness-lifecycle.md
+  - task:test-fixture-corpus.md
+  - task:deterministic-embedding-provider.md
 addressed-by:
-  - src://core/src/paths.ts#resolvePragPaths
-  - src://core/src/paths.ts#PragPaths
-  - src://core/src/paths.ts#PragConfig
-  - src://core/src/paths.ts#loadPragConfig
+  - src:core/src/paths.ts#resolvePragPaths
+  - src:core/src/paths.ts#PragPaths
+  - src:core/src/paths.ts#PragConfig
+  - src:core/src/paths.ts#loadPragConfig
 ---
 ## Objective
 Make it possible to run `prag` fully isolated from the developer's own installation with one variable, and make that isolation assertable before anything destructive runs (ADR-019).

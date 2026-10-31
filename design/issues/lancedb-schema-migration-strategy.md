@@ -5,7 +5,7 @@ title: LanceDB schema evolution relies on drop-and-reindex
 status: open
 priority: medium
 relates-to:
-  - feature://git-branch-awareness.md
+  - feature:git-branch-awareness.md
 ---
 ## Problem
 Three kinds of version skew are covered: the HTTP/MCP contract by `apiVersion` (ADR-016), the embedding model by the `.embedding-model.json` sidecar (ADR-015), and the daemon/CLI pairing by the identity check. Nothing covers the **LanceDB table schemas themselves**.

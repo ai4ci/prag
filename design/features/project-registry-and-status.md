@@ -6,9 +6,9 @@ status: accepted
 priority: high
 area: daemon
 guided-by:
-  - adr://ADR-009.md
-  - adr://ADR-017.md
-  - adr://ADR-023.md
+  - adr:ADR-009.md
+  - adr:ADR-017.md
+  - adr:ADR-023.md
 ---
 ## Overview
 Indexing targets and monitoring boundaries are governed by a centralized, database-backed **Allow/Deny URI Grants** policy rule set (`grants` table) in LanceDB. The system decouples policy permissions from versioned project containers (`projects` table), operating uniformly over normalized URIs (`file:///...` and `https://...`) without dirtying user repositories with marker files (`.prag`).
