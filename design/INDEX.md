@@ -7,14 +7,6 @@ title: prag Design & Architecture Index
 
 Overview of architectural decisions, features, and engineering tasks for `prag` (**Pragmatic RAG**).
 
-## Indexes
-- [Architecture Decision Records](ADRS.md) · [Features](FEATURES.md) · [Tasks](TASKS.md) · [Issues](ISSUES.md)
-
-## Architectural Resources & Specifications
-- [Storage Schema & Database Architecture](resources/storage-schema.md)
-- [CLI & HTTP/SSE MCP Interface Specification](resources/cli-and-mcp-interface.md)
-- [Environment Variables, Configuration, and Storage Paths](resources/env-and-storage-paths.md)
-
 ## Features Summary
 
 <!-- loom view: feature_list -->
@@ -30,4 +22,72 @@ Overview of architectural decisions, features, and engineering tasks for `prag` 
 - [Layout-Preserving Document Chunking](features/layout-preserving-chunking.md)
 - [Non-Local Content and Web URI Ingestion (Firecrawl)](features/web-and-nonlocal-content.md)
 - [Multi-Project Multi-Tenant Isolation](features/workspace-isolation.md)
-<!-- loom view: end -->
+<!-- loom view: feature_list end -->
+
+# Open Issues
+
+<!-- loom view: issue_list -->
+
+- [LanceDB schema evolution relies on drop-and-reindex](issues/lancedb-schema-migration-strategy.md)
+- [No budget or alert for chunks_pool disk usage growth](issues/chunk-pool-disk-usage-growth.md)
+- [Per-caller permission grants for search results](issues/search-result-permission-grants.md)
+<!-- loom view: issue_list end -->
+
+## ADR summary
+
+<!-- loom view: adr_list -->
+
+- [Storage Engine Selection (LanceDB Core Matrix)](adrs/ADR-001.md)
+- [Content-Addressable Storage (CAS) for Git Branch Proliferation](adrs/ADR-002.md)
+- [Selection of Parsing Frameworks (Tree-sitter and LiteParse)](adrs/ADR-003.md)
+- [In-Database Local Content Retention](adrs/ADR-004.md)
+- [Dual Component Architecture via Local Port (Background Daemon and Client Wrappers)](adrs/ADR-005.md)
+- [Local Polyglot Embedding Model Selection](adrs/ADR-006.md)
+- [Hybrid Search via Dense Vector and BM25 Full-Text Search with Reciprocal Rank Fusion](adrs/ADR-007.md)
+- [Unified Freshness Leases (validUntil) for Local Ingestion Cooldown and Remote Web TTLs](adrs/ADR-008.md)
+- [Unified Allow/Deny URI Grants Rule Set and Database-Backed Project Discovery](adrs/ADR-009.md)
+- [AST-Based Whitespace Normalization for Chunk Hashing (Preserving Comments)](adrs/ADR-010.md)
+- [Native HTTP/SSE MCP Server Endpoint Built Directly into Background Daemon](adrs/ADR-011.md)
+- [Air-Gap Scope Clarification (Self-Hosted by Default, Not Zero-Network)](adrs/ADR-012.md)
+- [Shared-Secret Authentication for the Loopback HTTP/MCP Endpoint](adrs/ADR-013.md)
+- [Vectorised Units - Sliding-Window Vectorisation of Oversized Chunks](adrs/ADR-014.md)
+- [Pinned Embedding Model with Full Rebuild on Re-Embed](adrs/ADR-015.md)
+- [Loud Daemon Identity and API-Version Mismatch, No Automatic Port Fallback](adrs/ADR-016.md)
+- [Manual Non-Eager Garbage Collection for chunks_pool via CLI and MCP](adrs/ADR-017.md)
+- [Split Search into search_local and search_all Across CLI and MCP](adrs/ADR-018.md)
+- [Hermetic Test Environment - Single Root Override, Ephemeral Port, Injectable Embedder](adrs/ADR-019.md)
+- [Toolchain - Bun Workspaces with tsc, Pending a Native-Addon Spike](adrs/ADR-020.md)
+- [Ingestion Concurrency - Workers Parse, Main Thread Embeds and Writes](adrs/ADR-021.md)
+- [Unified Error Envelope, HTTP Status Mapping and CLI Exit Codes](adrs/ADR-022.md)
+- [Ingestion Limits via Discovery Filters and Watch Admission Control](adrs/ADR-023.md)
+<!-- loom view: adr_list end -->
+
+## Roadmap (Open tasks)
+
+<!-- loom view: task_list -->
+
+- [Implement PRAG_ROOT isolation and assertable resolved paths](tasks/test-environment-isolation.md)
+- [Implement branch_mapping table schema and branch pruning lifecycle](tasks/branch-mapping-and-pruning.md)
+- [Implement short-lived CLI client with lazy daemon spawning and HTTP queries](tasks/cli-read-only-search.md)
+- [Define LanceDB database schemas and interfaces in @prag/core](tasks/core-database-schemas.md)
+- [Implement daemon local loopback HTTP server and lifecycle management](tasks/daemon-http-server-and-lifecycle.md)
+- [Spike native addon support under Bun (LanceDB, ONNX, Tree-sitter)](tasks/toolchain-spike-native-addons.md)
+- [Implement test harness setup/teardown with ephemeral port and no-spawn mode](tasks/test-harness-lifecycle.md)
+- [Implement injectable fake embedding provider (fake:<dim>)](tasks/deterministic-embedding-provider.md)
+- [Maintain the test fixture corpus and git fixture builder](tasks/test-fixture-corpus.md)
+- [Implement the unified error envelope, status mapping and exit codes](tasks/error-contract.md)
+- [Implement hybrid search with LanceDB BM25 FTS and Reciprocal Rank Fusion](tasks/hybrid-search-rrf.md)
+- [Implement discovery filters, skip reporting and watch admission control](tasks/ingestion-limits-and-admission.md)
+- [Implement the ingestion worker pool with main-thread embedding and writes](tasks/ingestion-worker-pool.md)
+- [Implement LanceDB initialization scripts with 7-table schema setup](tasks/lancedb-init-scripts.md)
+- [Implement grants and projects tables with allow/deny evaluation and Chokidar filter integration](tasks/project-registry-and-exclusions.md)
+- [Make POST /sync a true drain barrier](tasks/sync-drain-barrier.md)
+- [Implement hardware acceleration provider selection and air-gap enforcement](tasks/air-gap-hardware-provider.md)
+- [Expose native HTTP/SSE Model Context Protocol (MCP) server endpoint in daemon](tasks/mcp-server-endpoint.md)
+- [Implement LiteParse layout-preserving PDF/DOCX to Markdown pipeline](tasks/liteparse-document-pipeline.md)
+- [Build Tree-sitter and LiteParse parser routing in @prag/daemon](tasks/daemon-parser-router.md)
+- [Implement pinned embedding model detection and prag reembed rebuild](tasks/embedding-model-migration.md)
+- [Construct thread-safe background queue with Chokidar debouncing](tasks/daemon-ingestion-queue.md)
+- [Implement Firecrawl-backed web ingestion with self-hosted endpoint support](tasks/web-ingestion-pipeline.md)
+- [Enforce project-scoped query and storage isolation across workspaces](tasks/workspace-isolation-enforcement.md)
+<!-- loom view: task_list end -->
