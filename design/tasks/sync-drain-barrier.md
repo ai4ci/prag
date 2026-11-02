@@ -2,7 +2,7 @@
 class: task
 id: sync-drain-barrier.md
 title: Make POST /sync a true drain barrier
-status: in_progress
+status: done
 priority: high
 relates-to:
   - feature:test-harness-and-fixtures.md
@@ -29,34 +29,33 @@ Define and implement `POST /sync` as a drain barrier so tests can assert on inde
 
 ## Implementation status
 
-Reverted from `done`: `/sync` returns before any work is written, so nothing downstream
-can assert indexed state without sleeping.
+Done (`15e36b2`). Every requirement verified by `daemontest:ingestion-e2e.test.ts#daemonWithIngestionSuite`.
 
-- **Not a drain barrier.** `IngestionQueue.flushAll()` (`packages/daemon/src/ingestion-queue.ts:248-271`)
-  clears timers and the dirty map, then dispatches
-  `this.pool.processFile(...).then(r => this.onFileReady(r))` **without awaiting** the
-  promise. The consuming callback is fire-and-forget too —
-  `(result) => this._onFileProcessed(result).catch(() => {})` (`packages/daemon/src/daemon.ts:97-100`)
-  — so even an awaited `processFile` would not imply the LanceDB write happened.
-  `flushAll()` resolves while ingestion is still in flight.
-- **Response shape unmet.** `/sync` answers `{ ok: true }` (`packages/daemon/src/daemon.ts:471-472`).
-  No `flushedFiles`/`pendingFiles`, although the CLI already prints both when present
-  (`packages/cli/src/main.ts:294-299`) — the client and CLI are coded for a contract the
-  server never sends.
-- **No timeout, no per-project drain, no lease forcing.** `_handleSync(_req, res)`
-  ignores the request body, so `{ projectId }` is discarded; there is no `SYNC_TIMEOUT`
-  path (`grep SYNC_TIMEOUT packages/` → 0), and no attempt to bypass an outstanding
-  `validUntil` lease — `validUntil` is never written (always `null`,
-  `packages/daemon/src/daemon.ts:218`).
-- **Verification inverted.** No test does a sleep-free sync-then-assert. The only test
-  that both syncs and asserts indexed state sleeps first: write at
-  `packages/daemon/test/ingestion-e2e.test.ts:62-66`, `await sleep(1500)` at `:70`, sync
-  at `:73-77`, assert at `:79-101`. `packages/cli/test/daemon-client.test.ts:75-78` calls
-  `sync()` only to assert `result.ok`, on a harness where ingestion is disabled and
-  `/sync` short-circuits (`daemon.ts:464-467`). `packages/daemon/test/ingestion-queue.test.ts`
-  contains 19 compensating sleeps (100-500 ms each).
+- **Drain barrier.** `IngestionQueue.flushAll()` (`packages/daemon/src/ingestion-queue.ts:391`)
+  dispatches `pool.processFile(...).then(r => this.onFileReady(r))` and awaits it via
+  `drain()`; the queue callback returns the write's promise, and `Daemon.trackWrite()`
+  (`packages/daemon/src/daemon.ts`) holds it so awaiting implies the LanceDB commit —
+  the old callback was `(result) => this._onFileProcessed(result).catch(() => {})`.
+- **Per-project + response shape.** `_handleSync` reads `{ projectId }` from the body and
+  passes it to `flushAll`/`scanComplete`/`pendingUris`; answers
+  `{ ok, flushedFiles, pendingFiles, failedFiles, hadNewFailures }` (200 drained, 202 more
+  arriving, 504 on deadline). `flushedFiles` counts what the drain dispatched — counting
+  `before - after` reported 0 for a project whose initial scan had queued nothing yet.
+- **Bounded.** `withDeadline()` over three phases (initial scan, flush, write) under
+  `ingestion.syncTimeoutMs` / `PRAG_SYNC_TIMEOUT_MS` (default 60 s); on expiry, 504
+  `SYNC_TIMEOUT` with `pendingFiles` + up to 20 `pendingUris`, exit code 8 in the CLI.
+- **Lease forcing.** The drain clears the debounce timers for the target project and
+  ingests regardless of `validUntil`; the lease-forcing test uses a 60 s cooldown so it
+  can only pass if the flush is truly forced, and asserts a later file still lands.
+- **Found while verifying: the drain trusted event delivery.** chokidar is asynchronous,
+  so a file written microseconds before `/sync` was invisible to it — and if inotify
+  coalesced the event the file stayed unindexed until the next touch. `flushAll()` now
+  calls `_reconcile()`, which walks the registered roots and queues anything with
+  `mtimeMs` past the last reconciliation. Deletions stay with `prag prune`.
+- **Verification.** Sleep-free sync-then-assert (`syncs a project just registered with no
+  sleep`), lease forcing, `SYNC_TIMEOUT`, and a write/sync/assert loop — 25 iterations in
+  the suite, `PRAG_SYNC_LOOP=300` for the spec's several hundred (each iteration is a
+  LanceDB commit, ~1 s). The 1500 ms sleep in this file is gone.
 
-Remaining: await the dispatched chain end-to-end (return the promise from the queue
-callback and await `_onFileProcessed`), report flushed/pending counts, add the per-project
-body parameter and a bounded timeout with `SYNC_TIMEOUT`, then delete the sleeps from
-`ingestion-e2e.test.ts` and use sync-then-assert there.
+`packages/daemon/test/ingestion-queue.test.ts` still sleeps; those cases test the debounce
+window itself, which is a timer under test rather than a race with one.
