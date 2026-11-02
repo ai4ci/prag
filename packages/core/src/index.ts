@@ -35,13 +35,19 @@ export {
   type SearchResult,
   type SearchFileHit,
   type SearchChunkHit,
+  type SearchMode,
+  type HybridSearchOptions,
 } from "./search.js";
 
 export {
   FakeEmbeddingProvider,
   getProvider,
   registerProvider,
+  resolveEmbeddingModel,
   parseFakeDim,
+  readEmbeddingSidecar,
+  writeEmbeddingSidecar,
+  DEFAULT_EMBEDDING_MODEL,
   type EmbeddingProvider,
   type EmbeddingSidecar,
   type ProviderFactory,
@@ -57,9 +63,29 @@ export {
   chunkHash,
   normalizeWhitespace,
   detectLanguageFromPath,
+  UNSUPPORTED_DOCUMENT_EXTENSIONS,
   type Chunk,
   type ChunkedFile,
 } from "./chunker.js";
+
+export {
+  OnnxEmbeddingProvider,
+  type OnnxConfig,
+} from "./onnx-provider.js";
+
+export {
+  splitVectorUnits,
+  assertVectorUnitBudget,
+  approximateTokenizer,
+  DEFAULT_MAX_VECTOR_UNIT_TOKENS,
+  DEFAULT_VECTOR_UNIT_OVERLAP_TOKENS,
+  type Tokenizer,
+} from "./vector-units.js";
+
+export {
+  chunkMarkdown,
+  chunkDocumentOrCode,
+} from "./markdown-chunker.js";
 
 export {
   resolvePragPaths,

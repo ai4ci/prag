@@ -6,7 +6,12 @@
 
 import { parentPort } from "node:worker_threads";
 import { readFile } from "node:fs/promises";
-import { chunkFile, detectLanguageFromPath } from "@prag/core";
+import { createHash } from "node:crypto";
+import {
+  chunkDocumentOrCode,
+  detectLanguageFromPath,
+  UNSUPPORTED_DOCUMENT_EXTENSIONS,
+} from "@prag/core";
 
 export interface WorkerInput {
   projectId: string;
@@ -17,29 +22,51 @@ export interface WorkerOutput {
   projectId: string;
   filePath: string;
   language: string;
+  /** sha256 of the raw file bytes — the file_mapping content address. */
+  contentHash: string;
   chunks: Array<{
     chunkHash: string;
     text: string;
     startLine: number;
     endLine: number;
-    scopeContext: string;
+    scopeContext: string | null;
   }>;
   error?: string;
 }
 
-if (parentPort) {
-  parentPort.on("message", async (input: WorkerInput) => {
+/** Formats the MVP has no parser for — rejected by name, never chunked as text. */
+export function unsupportedFormat(path: string): string | null {
+  const ext = path.toLowerCase().match(/(\.[a-z0-9]+)$/)?.[1] ?? "";
+  return UNSUPPORTED_DOCUMENT_EXTENSIONS.has(ext) ? ext : null;
+}
+
+const port = parentPort;
+if (port) {
+  port.on("message", async (input: WorkerInput) => {
     try {
+      const rejected = unsupportedFormat(input.filePath);
+      if (rejected) {
+        const output: WorkerOutput = {
+          projectId: input.projectId,
+          filePath: input.filePath,
+          language: "unknown",
+          contentHash: "",
+          chunks: [],
+          error: `UNSUPPORTED_FORMAT: no parser for ${rejected} (LiteParse is out of scope)`,
+        };
+        port.postMessage(output);
+        return;
+      }
+
       const lang = detectLanguageFromPath(input.filePath);
       const content = await readFile(input.filePath, "utf-8");
-      const chunked = chunkFile(input.filePath, content, {
-        chunkMaxSize: 512,
-      });
+      const chunked = chunkDocumentOrCode(input.filePath, content);
 
       const output: WorkerOutput = {
         projectId: input.projectId,
         filePath: input.filePath,
         language: lang,
+        contentHash: createHash("sha256").update(content).digest("hex"),
         chunks: chunked.chunks.map((c) => ({
           chunkHash: c.chunkHash,
           text: c.text,
@@ -49,16 +76,17 @@ if (parentPort) {
         })),
       };
 
-      parentPort.postMessage(output);
+      port.postMessage(output);
     } catch (err) {
       const output: WorkerOutput = {
         projectId: input.projectId,
         filePath: input.filePath,
         language: "unknown",
+        contentHash: "",
         chunks: [],
         error: (err as Error).message,
       };
-      parentPort.postMessage(output);
+      port.postMessage(output);
     }
   });
 }

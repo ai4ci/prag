@@ -33,6 +33,21 @@ export class McpHandler {
     this.server = this._buildServer();
   }
 
+  /** Shared search path so both tools build the candidate pool identically. */
+  private _search(query: string, limit: number, projectId?: string) {
+    return hybridSearch(
+      this.db.table("chunks_pool"),
+      this.db.table("vector_pool"),
+      this.db.table("chunk_mapping"),
+      this.db.table("file_mapping"),
+      this.embedder,
+      query,
+      limit,
+      undefined,
+      { projectId, mode: "hybrid" },
+    );
+  }
+
   /** Handle an incoming request: GET → SSE stream, POST → JSON-RPC message. */
   async handle(
     req: IncomingMessage,
@@ -71,10 +86,10 @@ export class McpHandler {
 
     server.registerTool("search_local", {
       description:
-        "Search indexed content scoped to a project. Requires a projectId.",
+        "Search indexed content scoped to one project. Requires a projectId.",
       inputSchema: {
         query: z.string().describe("Search query"),
-        projectId: z.string().describe("Project ID to scope the search"),
+        projectId: z.string().describe("Project ID to scope the search to"),
         limit: z
           .number()
           .optional()
@@ -83,21 +98,46 @@ export class McpHandler {
       },
     }, async ({ query, projectId, limit }) => {
       try {
-        const result = await hybridSearch(
-          this.db.table("chunks_pool"),
-          this.db.table("vector_pool"),
-          this.db.table("chunk_mapping"),
-          this.db.table("file_mapping"),
-          this.embedder,
-          query,
-          limit,
-        );
+        const result = await this._search(query, limit ?? 10, projectId);
         return {
           content: [
             {
               type: "text" as const,
               text: JSON.stringify({ projectId, ...result }),
             },
+          ],
+        };
+      } catch (err) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Search error: ${(err as Error).message}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    });
+
+    server.registerTool("search_all", {
+      description:
+        "Search every indexed project (unscoped). Cross-project results only — " +
+        "an explicit tool, so search_local never silently widens.",
+      inputSchema: {
+        query: z.string().describe("Search query"),
+        limit: z
+          .number()
+          .optional()
+          .default(10)
+          .describe("Max file-level results"),
+      },
+    }, async ({ query, limit }) => {
+      try {
+        const result = await this._search(query, limit ?? 10, undefined);
+        return {
+          content: [
+            { type: "text" as const, text: JSON.stringify(result) },
           ],
         };
       } catch (err) {

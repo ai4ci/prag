@@ -255,11 +255,11 @@ export class DaemonClient {
 
   /** Spawn the daemon and wait for it to become ready. */
   async spawnDaemon(): Promise<HealthResponse> {
-    // Find daemon entry point
-    const daemonPkg = join(import.meta.dirname!, "..", "..", "daemon", "src", "daemon.ts");
-    const entry = existsSync(daemonPkg)
-      ? daemonPkg
-      : join(import.meta.dirname!, "..", "..", "daemon", "dist", "index.js");
+    // Source layout first (npm workspaces, tsx), then the built layout.
+    const source = join(import.meta.dirname!, "..", "..", "daemon", "src", "main.ts");
+    const entry = existsSync(source)
+      ? source
+      : join(import.meta.dirname!, "..", "..", "daemon", "dist", "main.js");
 
     const proc = spawn(
       process.execPath,

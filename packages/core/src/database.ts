@@ -277,10 +277,12 @@ export class LanceDbSchema {
       return;
     }
 
+    // def.primaryKey is *not* passed to createTable: LanceDB 0.41 has no
+    // primary-key option, so it was silently ignored. Uniqueness is enforced at
+    // write time by the mergeInsert keys in the upsert* helpers instead.
     const empty = new ArrowTable(def.schema);
     const table = await this._db!.createTable(def.name, empty, {
       mode: "create",
-      primaryKey: def.primaryKey,
     });
 
     this._tables.set(def.name, table);
@@ -312,8 +314,28 @@ export class LanceDbSchema {
 }
 
 // ── Batch-upsert helpers ──────────────────────────────────────────────
-// shortcut: naive per-row insert via `add`. Upgrade to Arrow record-batch
+//
+// Every helper is a real merge-insert keyed on the table's primary key, so
+// re-feeding the same row is a no-op rather than a duplicate. `add()` was
+// append-only, which meant a re-index of an unchanged file grew file_mapping,
+// chunk_mapping and vector_pool on every pass.
+// shortcut: per-key merge rather than one Arrow batch; upgrade to record-batch
 // construction for bulk throughput when ingestion is profiled.
+
+async function merge(
+  table: Table,
+  on: string | string[],
+  rows: Record<string, unknown>[],
+  updateOnMatch = true,
+): Promise<void> {
+  if (rows.length === 0) return;
+  const builder = table.mergeInsert(on).whenNotMatchedInsertAll();
+  // chunks_pool rows are identical by construction (keyed by content hash), so
+  // the update is a no-op there; mapping tables do carry changed values.
+  await (updateOnMatch ? builder.whenMatchedUpdateAll() : builder).execute(
+    rows as never,
+  );
+}
 
 export async function upsertGrants(
   table: Table,
@@ -324,7 +346,7 @@ export async function upsertGrants(
     createdAt: Date;
   }>,
 ): Promise<void> {
-  await table.add(rows);
+  await merge(table, "pattern", rows);
 }
 
 export async function upsertProjects(
@@ -340,7 +362,9 @@ export async function upsertProjects(
     lastSyncedAt: Date | null;
   }>,
 ): Promise<void> {
-  await table.add(rows);
+  // status/lastSyncedAt are daemon-owned; a re-watch must not resurrect
+  // registeredAt or clobber a paused state.
+  await merge(table, "projectId", rows);
 }
 
 export async function upsertBranchMapping(
@@ -353,7 +377,7 @@ export async function upsertBranchMapping(
     updatedAt: Date;
   }>,
 ): Promise<void> {
-  await table.add(rows);
+  await merge(table, ["projectId", "branch", "uri"], rows);
 }
 
 export async function upsertFileMapping(
@@ -367,7 +391,7 @@ export async function upsertFileMapping(
     language: string;
   }>,
 ): Promise<void> {
-  await table.add(rows);
+  await merge(table, "fileVersionId", rows);
 }
 
 export async function upsertChunkMapping(
@@ -378,7 +402,7 @@ export async function upsertChunkMapping(
     chunkHash: string;
   }>,
 ): Promise<void> {
-  await table.add(rows);
+  await merge(table, ["fileVersionId", "chunkIndex"], rows);
 }
 
 export async function upsertChunksPool(
@@ -389,7 +413,7 @@ export async function upsertChunksPool(
     scopeContext: string | null;
   }>,
 ): Promise<void> {
-  await table.add(rows);
+  await merge(table, "chunkHash", rows, false);
 }
 
 export async function upsertVectorPool(
@@ -400,5 +424,5 @@ export async function upsertVectorPool(
     vector: Float32Array;
   }>,
 ): Promise<void> {
-  await table.add(rows);
+  await merge(table, ["chunkHash", "unitIndex"], rows);
 }

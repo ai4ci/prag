@@ -18,6 +18,7 @@ export interface SearchChunkHit {
 
 export interface SearchFileHit {
   fileVersionId: string;
+  projectId: string;
   uri: string;
   language: string;
   contentHash: string;
@@ -25,10 +26,22 @@ export interface SearchFileHit {
   chunks: SearchChunkHit[];
 }
 
+export type SearchMode = "hybrid" | "vector" | "fts";
+
 export interface SearchResult {
   query: string;
+  mode: SearchMode;
   hits: SearchFileHit[];
   totalChunks: number;
+}
+
+export interface HybridSearchOptions {
+  /** Restrict results to one project's files. Omitted = every project. */
+  projectId?: string;
+  limit?: number;
+  /** Candidate pool per source before fusion (default 50). */
+  candidateLimit?: number;
+  mode?: SearchMode;
 }
 
 // ── RRF Constants ──────────────────────────────────────────────────────
@@ -41,6 +54,10 @@ const RRF_K = 60;
  * Run hybrid search across FTS and vector indexes, fuse via RRF, and
  * map results back to files through the mapping tables.
  *
+ * Project scoping (`options.projectId`) is applied before the file-level limit
+ * is taken, so a scoped query returns `limit` in-scope files rather than
+ * whatever survived filtering.
+ *
  * @param chunksTable  - The chunks_pool table (must have FTS index on "text").
  * @param vectorsTable - The vector_pool table (must have IVF_PQ index on "vector").
  * @param chunkMapping - The chunk_mapping table.
@@ -48,7 +65,7 @@ const RRF_K = 60;
  * @param embedder     - Embedding provider for vector search.
  * @param query        - User query string.
  * @param limit        - Max file-level results (default 10).
- * @param ftsLimit     - Max FTS results to fetch for fusion (default 50).
+ * @param ftsLimit     - Max candidates to fetch per source for fusion (default 50).
  */
 export async function hybridSearch(
   chunksTable: Table,
@@ -59,29 +76,42 @@ export async function hybridSearch(
   query: string,
   limit: number = 10,
   ftsLimit: number = 50,
+  options: HybridSearchOptions = {},
 ): Promise<SearchResult> {
-  // Run both searches in parallel
-  const [ftsHits, vectorHits] = await Promise.all([
-    ftsSearch(chunksTable, query, ftsLimit),
-    vectorSearch(vectorsTable, chunksTable, embedder, query, ftsLimit),
-  ]);
+  const mode = options.mode ?? "hybrid";
+  const pool = options.candidateLimit ?? ftsLimit;
+  const projectId = options.projectId;
 
-  // Fuse via RRF
-  const fused = fuseResults(ftsHits, vectorHits);
+  // The query vector is computed once and reused across widening passes.
+  const queryVector =
+    mode === "fts" ? null : await embedder.embed(query);
 
-  // Map to files
-  const fileHits = await mapToFiles(
-    fused,
-    chunkMapping,
-    fileMapping,
-    limit,
-  );
+  // Candidate pool per source. With no scope, one pass is exact. With a scope,
+  // in-scope chunks can sit below the pool cut-off, so widen until the limit is
+  // satisfied or a pass stops growing the pool.
+  let size = pool;
+  for (;;) {
+    const [ftsHits, vectorHits] = await Promise.all([
+      mode === "vector" ? [] : ftsSearch(chunksTable, query, size),
+      queryVector
+        ? vectorSearch(vectorsTable, chunksTable, queryVector, size)
+        : [],
+    ]);
 
-  return {
-    query,
-    hits: fileHits,
-    totalChunks: fused.length,
-  };
+    const fused = fuseResults(ftsHits, vectorHits);
+    const fileHits = await mapToFiles(
+      fused,
+      chunkMapping,
+      fileMapping,
+      limit,
+      projectId,
+    );
+
+    if (fileHits.length >= limit || !projectId || fused.length < size) {
+      return { query, mode, hits: fileHits, totalChunks: fused.length };
+    }
+    size *= 4;
+  }
 }
 
 // ── FTS search ────────────────────────────────────────────────────────
@@ -111,32 +141,29 @@ async function ftsSearch(
 async function vectorSearch(
   vectorsTable: Table,
   chunksTable: Table,
-  embedder: EmbeddingProvider,
-  query: string,
+  queryVector: Float32Array,
   limit: number,
 ): Promise<SearchChunkHit[]> {
-  // Embed the query
-  const qvec = await embedder.embed(query);
-
   // Search vector_pool
   const vecResults = await vectorsTable
     .query()
-    .nearestTo(qvec)
+    .nearestTo(queryVector)
     .limit(limit)
     .toArray();
 
-  // Collect unique chunkHashes (same chunk may have multiple units)
-  const seen = new Set<string>();
-  const chunkResults: Array<{ chunkHash: string; distance: number }> = [];
-
+  // Collapse units: one chunk may contribute several overlapping windows, and
+  // only its best (smallest-distance) unit represents it.
+  const best = new Map<string, number>();
   for (const r of vecResults as Array<Record<string, unknown>>) {
     const hash = r.chunkHash as string;
     const dist = (r._distance as number) ?? 1;
-    if (!seen.has(hash)) {
-      seen.add(hash);
-      chunkResults.push({ chunkHash: hash, distance: dist });
-    }
+    const seen = best.get(hash);
+    if (seen === undefined || dist < seen) best.set(hash, dist);
   }
+  const chunkResults = [...best].map(([chunkHash, distance]) => ({
+    chunkHash,
+    distance,
+  }));
 
   // Fetch text for each chunk from chunks_pool
   const textMap = new Map<string, string>();
@@ -213,6 +240,7 @@ async function mapToFiles(
   chunkMapping: Table,
   fileMapping: Table,
   limit: number,
+  projectId?: string,
 ): Promise<SearchFileHit[]> {
   if (chunks.length === 0) return [];
 
@@ -240,22 +268,28 @@ async function mapToFiles(
 
   if (fileChunks.size === 0) return [];
 
-  // Lookup file info
+  // Lookup file info, scoped to one project when asked. The scope predicate
+  // belongs here (not on the ANN/FTS query) because chunks_pool and vector_pool
+  // are global by design — project membership lives in file_mapping.
   const fvids = [...fileChunks.keys()];
+  const scope = projectId
+    ? ` AND projectId = '${projectId.replace(/'/g, "''")}'`
+    : "";
   const fileRows = await fileMapping
     .query()
     .where(
-      `fileVersionId IN (${fvids.map((id) => `'${id}'`).join(",")})`,
+      `fileVersionId IN (${fvids.map((id) => `'${id}'`).join(",")})${scope}`,
     )
     .limit(fvids.length)
     .toArray();
 
   const fileInfo = new Map<
     string,
-    { uri: string; language: string; contentHash: string }
+    { projectId: string; uri: string; language: string; contentHash: string }
   >();
   for (const row of fileRows as Array<Record<string, unknown>>) {
     fileInfo.set(row.fileVersionId as string, {
+      projectId: row.projectId as string,
       uri: row.uri as string,
       language: row.language as string,
       contentHash: row.contentHash as string,

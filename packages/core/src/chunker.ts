@@ -36,6 +36,43 @@ export interface ChunkedFile {
 // ── Language detection ────────────────────────────────────────────────
 
 /**
+ * Formats with no parser in the MVP. They must be refused by name rather than
+ * read as UTF-8 text, which is what the extension fallback would otherwise do
+ * (task:daemon-parser-router.md; LiteParse is `task:liteparse-document-pipeline.md`).
+ */
+export const UNSUPPORTED_DOCUMENT_EXTENSIONS: ReadonlySet<string> = new Set([
+  ".pdf",
+  ".docx",
+  ".doc",
+  ".pptx",
+  ".ppt",
+  ".xlsx",
+  ".xls",
+  ".odt",
+  ".rtf",
+  ".epub",
+  ".zip",
+  ".tar",
+  ".gz",
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".gif",
+  ".webp",
+  ".bmp",
+  ".tif",
+  ".tiff",
+  ".ico",
+  ".so",
+  ".dylib",
+  ".dll",
+  ".exe",
+  ".wasm",
+  ".class",
+  ".pyc",
+]);
+
+/**
  * Detect language using tree-sitter-language-pack, with fallback for
  * extension → language name mapping.
  */

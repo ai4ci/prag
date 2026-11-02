@@ -5,15 +5,16 @@
 // discovery filters before enqueuing, and dispatches to the WorkerPool.
 
 import chokidar from "chokidar";
+import type { FSWatcher } from "chokidar";
 import { open, type FileHandle } from "node:fs/promises";
-import { relative, resolve } from "node:path";
+import { resolve } from "node:path";
 import { WorkerPool } from "./worker-pool.js";
 import { type ProcessResult } from "./worker-pool.js";
 
 // ── Constants ────────────────────────────────────────────────────────
 
 const BINARY_DETECTION_BYTES = 8192;
-const DEFAULT_COOLDOWN_MS = 60_000;
+export const DEFAULT_COOLDOWN_MS = 60_000;
 
 // ── Types ─────────────────────────────────────────────────────────────
 
@@ -34,20 +35,43 @@ export interface ProjectIngestionState {
   skipCounters: Record<string, number>;
 }
 
+export interface IngestionStats {
+  /** Files watched across all projects. */
+  projects: number;
+  /** Events collected but not yet dispatched. */
+  dirty: number;
+  /** Files waiting out their cooldown window. */
+  cooling: number;
+  /** Dispatched to a worker and awaiting its write. */
+  inFlight: number;
+  perProject: Record<string, Record<string, number>>;
+}
+
 // ── IngestionQueue ────────────────────────────────────────────────────
 
 export class IngestionQueue {
-  private watchers = new Map<string, chokidar.FSWatcher>();
+  private watchers = new Map<string, FSWatcher>();
   private dirty = new Map<string, IngestionQueueItem>(); // uri → latest event
   private cooldowns = new Map<string, ReturnType<typeof setTimeout>>(); // uri → timer
   private skipCounters = new Map<string, Record<string, number>>();
+  private inFlight = new Set<Promise<unknown>>();
+  private _paused = false;
+  private _heldEvents: Array<{
+    type: "add" | "change" | "unlink";
+    projectId: string;
+    filePath: string;
+  }> = [];
   private pool: WorkerPool;
   private config: Required<IngestionConfig>;
-  private onFileReady: (result: ProcessResult) => void;
+  /**
+   * Awaited by the caller, so a drain barrier is possible: returning the write's
+   * promise is what lets /sync report "indexed" rather than "queued".
+   */
+  private onFileReady: (result: ProcessResult) => void | Promise<void>;
 
   constructor(
     pool: WorkerPool,
-    onFileReady: (result: ProcessResult) => void,
+    onFileReady: (result: ProcessResult) => void | Promise<void>,
     config: IngestionConfig = {},
   ) {
     this.pool = pool;
@@ -84,7 +108,10 @@ export class IngestionQueue {
     });
 
     watcher.on("error", (err) => {
-      console.error("[prag] Ingestion watcher error:", err.message);
+      console.error(
+        "[prag] Ingestion watcher error:",
+        (err as Error)?.message ?? String(err),
+      );
     });
 
     this.watchers.set(projectId, watcher);
@@ -115,11 +142,58 @@ export class IngestionQueue {
     }
     this.cooldowns.clear();
     this.dirty.clear();
+    await this.drain();
+  }
+
+  /** Stop collecting new events (existing work still drains). */
+  pause(): void {
+    this._paused = true;
+  }
+
+  /** Resume and replay whatever arrived while paused. */
+  resume(): void {
+    if (!this._paused) return;
+    this._paused = false;
+    const held = this._heldEvents.splice(0);
+    for (const evt of held) {
+      if (evt.type === "unlink") {
+        this._onUnlink(evt.projectId, evt.filePath);
+      } else {
+        this._onEvent(evt.projectId, evt.filePath, evt.type);
+      }
+    }
   }
 
   /** Get skip counters for a project. */
   getSkipCounters(projectId: string): Record<string, number> {
     return { ...(this.skipCounters.get(projectId) ?? {}) };
+  }
+
+  /** Files queued for ingestion but not yet written to the index. */
+  pendingCount(): number {
+    return this.dirty.size + this.inFlight.size;
+  }
+
+  /** Snapshot for /health and `prag status`. */
+  stats(): IngestionStats {
+    const perProject: Record<string, Record<string, number>> = {};
+    for (const [projectId, counters] of this.skipCounters) {
+      perProject[projectId] = { ...counters };
+    }
+    return {
+      projects: this.watchers.size,
+      dirty: this.dirty.size,
+      cooling: this.cooldowns.size,
+      inFlight: this.inFlight.size,
+      perProject,
+    };
+  }
+
+  /** Wait for dispatched worker jobs to finish (not new arrivals). */
+  async drain(): Promise<void> {
+    while (this.inFlight.size > 0) {
+      await Promise.allSettled([...this.inFlight]);
+    }
   }
 
   // ── Internal ──────────────────────────────────────────────────────
@@ -181,6 +255,12 @@ export class IngestionQueue {
     filePath: string,
     eventType: "add" | "change",
   ): void {
+    // ADR-017: the --gc-chunks sweep pauses ingestion, because dedup is a
+    // check-then-act sequence and a concurrent sweep leaves a dangling pointer.
+    if (this._paused) {
+      this._heldEvents.push({ type: eventType, projectId, filePath });
+      return;
+    }
     const uri = resolve(filePath);
     const existing = this.dirty.get(uri);
 
@@ -195,6 +275,10 @@ export class IngestionQueue {
   }
 
   private _onUnlink(projectId: string, filePath: string): void {
+    if (this._paused) {
+      this._heldEvents.push({ type: "unlink", projectId, filePath });
+      return;
+    }
     const uri = resolve(filePath);
 
     // Cancel any pending cooldown
@@ -207,12 +291,26 @@ export class IngestionQueue {
     this.dirty.delete(uri);
 
     // Notify: process unlink immediately
-    this.onFileReady({
-      projectId,
-      filePath: uri,
-      language: "",
-      chunks: [],
-    });
+    this._dispatch(
+      this.onFileReady({
+        projectId,
+        filePath: uri,
+        language: "",
+        contentHash: "",
+        chunks: [],
+      }),
+    );
+  }
+
+  /** Track a dispatched result so drain()/flushAll() can await it. */
+  private _dispatch(work: unknown): void {
+    if (work && typeof (work as Promise<unknown>).then === "function") {
+      const p = Promise.resolve(work as Promise<unknown>).catch((err) => {
+        console.error("[prag] ingestion write failed:", err);
+      });
+      this.inFlight.add(p);
+      p.finally(() => this.inFlight.delete(p));
+    }
   }
 
   private _startCooldown(uri: string): void {
@@ -230,42 +328,42 @@ export class IngestionQueue {
         if (!pass) return;
 
         // Dispatch to worker pool
-        this.pool
-          .processFile(item.projectId, uri)
-          .then((result) => {
-            this.onFileReady(result);
-          })
-          .catch((err) => {
-            console.error("[prag] Worker error:", err.message);
-          });
+        this._dispatch(
+          this.pool
+            .processFile(item.projectId, uri)
+            .then((result) => this.onFileReady(result)),
+        );
       });
     }, this.config.cooldownMs);
 
     this.cooldowns.set(uri, timer);
   }
 
-  /** Flush all dirty files immediately (used by POST /sync). */
+  /**
+   * Drain: dispatch everything queued, await the workers, then await the
+   * writes they triggered. Only returns once the index reflects the disk, which
+   * is what makes `prag sync && prag search` behave.
+   */
   async flushAll(): Promise<void> {
-    for (const [uri, _timer] of this.cooldowns) {
-      clearTimeout(_timer);
+    for (const [_uri, timer] of this.cooldowns) {
+      clearTimeout(timer);
     }
     this.cooldowns.clear();
 
-    const items = Array.from(this.dirty.entries());
+    const items = Array.from(this.dirty.values());
     this.dirty.clear();
 
-    for (const [uri, item] of items) {
-      const pass = await this._checkFile(uri, item.projectId);
+    for (const item of items) {
+      const pass = await this._checkFile(item.uri, item.projectId);
       if (!pass) continue;
 
-      await this.pool
-        .processFile(item.projectId, uri)
-        .then((result) => {
-          this.onFileReady(result);
-        })
-        .catch((err) => {
-          console.error("[prag] Worker error:", err.message);
-        });
+      this._dispatch(
+        this.pool
+          .processFile(item.projectId, item.uri)
+          .then((result) => this.onFileReady(result)),
+      );
     }
+
+    await this.drain();
   }
 }

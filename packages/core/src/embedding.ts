@@ -5,6 +5,9 @@
 // ADR-006: real providers (Ollama, ONNX) implement the same interface.
 
 import { createHash } from "node:crypto";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { type Tokenizer } from "./vector-units.js";
 
 // ── Interface ─────────────────────────────────────────────────────────
 
@@ -19,6 +22,13 @@ export interface EmbeddingProvider {
   readonly maxSeqLength: number;
 
   /**
+   * The model's tokenizer, when reachable locally. Used to size ADR-014
+   * vectorised units; `undefined` means callers fall back to
+   * `approximateTokenizer()`.
+   */
+  readonly tokenizer?: Tokenizer;
+
+  /**
    * Embed a single text string. Returns a Float32Array of length `dim`.
    * Callers should chunk long text via vectorised units (ADR-014) before
    * calling this.
@@ -29,6 +39,16 @@ export interface EmbeddingProvider {
    * Embed multiple texts in one batch (providers may optimise this).
    */
   embedBatch(texts: string[]): Promise<Float32Array[]>;
+
+  /**
+   * Load model weights. Optional for providers with no local weights.
+   * `dim` and `maxSeqLength` are only trustworthy once this resolves, so a
+   * caller that sizes vectors or ADR-014 windows must await it first.
+   */
+  load?(): Promise<void>;
+
+  /** Release model weights / sessions. Optional for stateless providers. */
+  close?(): Promise<void>;
 }
 
 // ── Sidecar descriptor (ADR-015) ──────────────────────────────────────
@@ -39,6 +59,28 @@ export interface EmbeddingSidecar {
   maxSeqLength: number;
   /** ISO date when this sidecar was generated. */
   pinnedAt: string;
+}
+
+/** Read `<dir>/.embedding-model.json`, or null when absent/unreadable. */
+export function readEmbeddingSidecar(dir: string): EmbeddingSidecar | null {
+  try {
+    const raw = readFileSync(join(dir, ".embedding-model.json"), "utf-8");
+    return JSON.parse(raw) as EmbeddingSidecar;
+  } catch {
+    return null;
+  }
+}
+
+/** Persist the sidecar describing the index's current embedding space. */
+export function writeEmbeddingSidecar(
+  dir: string,
+  sidecar: EmbeddingSidecar,
+): void {
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, ".embedding-model.json"),
+    JSON.stringify(sidecar, null, 2) + "\n",
+  );
 }
 
 // ── Fake provider (ADR-019) ───────────────────────────────────────────
@@ -141,6 +183,21 @@ export function getProvider(model: string): EmbeddingProvider {
     `No embedding provider registered for model "${model}". ` +
       `Available prefixes: ${[...registry.keys()].join(", ")}`,
   );
+}
+
+// ── Default model ─────────────────────────────────────────────────
+
+/** The model prag embeds with when nothing is configured (ADR-006). */
+export const DEFAULT_EMBEDDING_MODEL = "onnx:Xenova/bge-small-en-v1.5";
+
+/**
+ * Resolve a model string to a provider. Accepts the registry prefixes
+ * (`fake:384`, `ollama:nomic-embed-text`, `onnx:Xenova/…`) and a bare ONNX id
+ * (`Xenova/bge-small-en-v1.5`), which is how model ids are normally written.
+ */
+export function resolveEmbeddingModel(model: string): EmbeddingProvider {
+  const key = /^[a-z]+:/.test(model) ? model : `onnx:${model}`;
+  return getProvider(key);
 }
 
 /** Parse dim from "fake:<dim>". */

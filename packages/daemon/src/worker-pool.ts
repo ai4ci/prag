@@ -5,6 +5,12 @@
 // embeds them via the hot in-memory model, and writes to LanceDB.
 //
 // Workers never touch the database or the embedding model — ADR-021 split.
+//
+// Slot-based rather than index-based: a dead worker is replaced *in its slot*,
+// so a job can never be posted to the wrong worker (issue:worker-pool-double-
+// respawn.md — the previous version keyed pending work by an index that shifted
+// when `workers.push()` grew the array, and respawned on both "error" and
+// "exit", doubling the pool on every crash).
 
 import { Worker } from "node:worker_threads";
 import { fileURLToPath } from "node:url";
@@ -27,147 +33,232 @@ export interface ProcessResult {
   projectId: string;
   filePath: string;
   language: string;
+  /** sha256 of the raw bytes — the file_mapping content address. */
+  contentHash: string;
   chunks: ChunkRecord[];
   error?: string;
 }
 
-type ResolveFn = (r: ProcessResult) => void;
-type RejectFn = (e: Error) => void;
+export interface WorkerPoolOptions {
+  /** Fail a job and recycle the worker if it does not answer in time. */
+  jobTimeoutMs?: number;
+  /** Worker script override (tests use a fixture worker). */
+  workerScript?: string;
+}
+
+type Pending = {
+  resolve: (r: ProcessResult) => void;
+  reject: (e: Error) => void;
+  timer: ReturnType<typeof setTimeout> | null;
+  input: WorkerInput;
+};
+
+type Job = {
+  input: WorkerInput;
+  resolve: (r: ProcessResult) => void;
+  reject: (e: Error) => void;
+};
+
+interface Slot {
+  id: number;
+  worker: Worker | null;
+  pending: Pending | null;
+}
+
+/** A worker died or hung; its slot has been recycled. */
+export class WorkerPoolError extends Error {}
+
+const DEFAULT_JOB_TIMEOUT_MS = 60_000;
 
 // ── WorkerPool ────────────────────────────────────────────────────────
 
 export class WorkerPool {
-  private workers: Worker[] = [];
-  private pending: Map<number, { resolve: ResolveFn; reject: RejectFn }> =
-    new Map();
-  private queue: Array<{
-    input: WorkerInput;
-    resolve: ResolveFn;
-    reject: RejectFn;
-  }> = [];
-  private idle: number[] = [];
+  private slots: Slot[] = [];
+  private queue: Job[] = [];
+  private script: string;
+  private jobTimeoutMs: number;
+  private closed = false;
   private nextId = 0;
 
-  constructor(
-    size: number,
-    workerScript?: string,
-  ) {
-    const script =
-      workerScript ??
-      resolve(
-        dirname(fileURLToPath(import.meta.url)),
-        "ingestion-worker.ts",
-      );
+  constructor(size: number, options: string | WorkerPoolOptions = {}) {
+    // Positional script override is kept for the existing tests/callers.
+    const opts: WorkerPoolOptions =
+      typeof options === "string" ? { workerScript: options } : options;
+
+    this.script =
+      opts.workerScript ??
+      resolve(dirname(fileURLToPath(import.meta.url)), "ingestion-worker.ts");
+    this.jobTimeoutMs = opts.jobTimeoutMs ?? DEFAULT_JOB_TIMEOUT_MS;
 
     for (let i = 0; i < size; i++) {
-      this._spawn(script);
+      this._addSlot();
     }
   }
 
-  /** Submit a file for processing. Returns when a worker finishes. */
+  /** Submit a file for processing. Resolves when a worker answers. */
   processFile(projectId: string, filePath: string): Promise<ProcessResult> {
+    const input: WorkerInput = { projectId, filePath };
     return new Promise((resolve, reject) => {
-      const input: WorkerInput = { projectId, filePath };
-      const item = { input, resolve, reject };
-
-      if (this.idle.length > 0) {
-        this._dispatch(this.idle.pop()!, item);
+      if (this.closed) {
+        reject(new WorkerPoolError("worker pool is closed"));
+        return;
+      }
+      const job: Job = { input, resolve, reject };
+      const free = this.slots.find((s) => s.worker && !s.pending);
+      if (free) {
+        this._run(free, job);
       } else {
-        this.queue.push(item);
+        this.queue.push(job);
       }
     });
   }
 
   /** Terminate all workers. */
   async close(): Promise<void> {
-    // Remove all listeners so the worker's internal MessagePort can
-    // be GC'd and the event loop can drain cleanly.
-    for (const w of this.workers) {
-      w.removeAllListeners();
+    this.closed = true;
+    const doomed: Array<Promise<unknown>> = [];
+    for (const slot of this.slots) {
+      if (slot.pending) {
+        WorkerPool._clearTimer(slot.pending);
+        slot.pending.reject(new WorkerPoolError("worker pool closed"));
+        slot.pending = null;
+      }
+      if (slot.worker) doomed.push(slot.worker.terminate());
+      slot.worker = null;
     }
-    await Promise.allSettled(
-      this.workers.map((w) => w.terminate()),
-    );
-    this.workers = [];
-    this.idle = [];
+    await Promise.allSettled(doomed);
+
+    // Nothing can pick these up any more; fail them instead of hanging callers.
+    for (const job of this.queue) {
+      job.reject(new WorkerPoolError("worker pool closed"));
+    }
     this.queue = [];
-    this.pending.clear();
+    this.slots = [];
   }
 
   get totalWorkers(): number {
-    return this.workers.length;
+    return this.slots.filter((s) => s.worker).length;
   }
 
   get queuedCount(): number {
     return this.queue.length;
   }
 
-  // ── Internal ──────────────────────────────────────────────────────
-
-  private _dispatch(idx: number, item: {
-    input: WorkerInput;
-    resolve: ResolveFn;
-    reject: RejectFn;
-  }): void {
-    this.pending.set(idx, {
-      resolve: item.resolve,
-      reject: item.reject,
-    });
-    this.workers[idx].postMessage(item.input);
+  /** Jobs handed to a worker but not yet answered. */
+  get busyCount(): number {
+    return this.slots.filter((s) => s.pending).length;
   }
 
-  private _spawn(script: string): void {
-    const idx = this.nextId++;
-    const worker = new Worker(script, {
-      workerData: { id: idx },
+  // ── Internal ──────────────────────────────────────────────────────
+
+  private _addSlot(): void {
+    const slot: Slot = { id: this.nextId++, worker: null, pending: null };
+    this.slots.push(slot);
+    this._spawn(slot);
+  }
+
+  private static _clearTimer(pending: Pending): void {
+    if (pending.timer) clearTimeout(pending.timer);
+    pending.timer = null;
+  }
+
+  private _run(slot: Slot, job: Job): void {
+    const pending: Pending = {
+      resolve: job.resolve,
+      reject: job.reject,
+      timer: null,
+      input: job.input,
+    };
+    pending.timer = setTimeout(() => {
+      pending.timer = null;
+      if (slot.pending !== pending) return;
+      slot.pending = null;
+      pending.reject(
+        new WorkerPoolError(
+          `worker timed out after ${this.jobTimeoutMs}ms on ${job.input.filePath}`,
+        ),
+      );
+      // A hung worker cannot be reasoned with; recycle the slot.
+      this._recycle(slot, "timeout");
+    }, this.jobTimeoutMs);
+    // A slow model load or big file must not hold the process open.
+    pending.timer.unref?.();
+
+    slot.pending = pending;
+    slot.worker!.postMessage(job.input);
+  }
+
+  /** Replace the worker in a slot exactly once, then take the next queued job. */
+  private _recycle(slot: Slot, reason: string): void {
+    const dead = slot.worker;
+    slot.worker = null;
+    if (dead) {
+      dead.removeAllListeners();
+      void dead.terminate().catch(() => {});
+    }
+    if (this.closed) return;
+
+    this._spawn(slot);
+    const next = this.queue.shift();
+    if (next && slot.worker && !slot.pending) this._run(slot, next);
+    else if (reason === "timeout") {
+      // Nothing queued: the slot simply returns to the idle set.
+    }
+  }
+
+  private _spawn(slot: Slot): void {
+    const worker = new Worker(this.script, {
+      workerData: { id: slot.id },
     });
+    slot.worker = worker;
 
     worker.on("message", (output: WorkerOutput) => {
-      // Resolve the pending promise for this worker
-      const pending = this.pending.get(idx);
-      if (pending) {
-        this.pending.delete(idx);
-        const result: ProcessResult = {
+      const pending = slot.pending;
+      if (!pending) return; // late message from a job already failed/timed out
+      slot.pending = null;
+      WorkerPool._clearTimer(pending);
+
+      pending.resolve({
+        projectId: output.projectId,
+        filePath: output.filePath,
+        language: output.language,
+        contentHash: output.contentHash ?? "",
+        chunks: (output.chunks ?? []).map((c) => ({
           projectId: output.projectId,
           filePath: output.filePath,
-          language: output.language,
-          chunks: output.chunks.map((c) => ({
-            projectId: output.projectId,
-            filePath: output.filePath,
-            chunkHash: c.chunkHash,
-            text: c.text,
-            startLine: c.startLine,
-            endLine: c.endLine,
-            scopeContext: c.scopeContext || "",
-          })),
-          error: output.error,
-        };
-        pending.resolve(result);
-      }
+          chunkHash: c.chunkHash,
+          text: c.text,
+          startLine: c.startLine,
+          endLine: c.endLine,
+          scopeContext: c.scopeContext ?? "",
+        })),
+        error: output.error,
+      });
 
-      // Dispatch next queued item or mark idle
       const next = this.queue.shift();
-      if (next) {
-        this._dispatch(idx, next);
-      } else {
-        this.idle.push(idx);
+      if (next) this._run(slot, next);
+    });
+
+    // An uncaught error in the worker and an unexpected exit both arrive here;
+    // slot.worker is nulled in _recycle, so the second event is a no-op.
+    const die = (reason: string) => {
+      if (slot.worker !== worker) return;
+      const pending = slot.pending;
+      if (pending) {
+        slot.pending = null;
+        WorkerPool._clearTimer(pending);
+        pending.reject(
+          new WorkerPoolError(`worker ${reason} on ${pending.input.filePath}`),
+        );
       }
-    });
+      this._recycle(slot, reason);
+    };
 
-    worker.on("error", (err) => {
-      const pending = this.pending.get(idx);
-      this.pending.delete(idx);
-      pending?.reject(err);
-      this._spawn(script); // respawn replacement
-    });
-
+    worker.on("error", (err: unknown) =>
+      die(`errored: ${(err as Error)?.message ?? String(err)}`),
+    );
     worker.on("exit", (code) => {
-      if (code !== 0) {
-        this._spawn(script); // respawn on unexpected exit
-      }
+      if (code !== 0) die(`exited with code ${code}`);
     });
-
-    this.workers.push(worker);
-    this.idle.push(idx);
   }
 }
