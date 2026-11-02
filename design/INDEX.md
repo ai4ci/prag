@@ -20,10 +20,10 @@ _(no results)_
 
 <!-- loom view: in_progress_feature_list -->
 
-- [Air-Gapped Local Runtime and Hardware Acceleration](features/air-gapped-runtime.md)
 - [Non-Blocking Background Worker Ingestion Queue](features/background-worker-queue.md)
 - [Dual Interface (Short-Lived CLI and Native HTTP/SSE MCP Endpoint)](features/dual-interfaces.md)
 - [Git Branch Awareness and State Continuity](features/git-branch-awareness.md)
+- [Local-First Runtime, Hardware Acceleration and Egress Transparency](features/local-first-runtime.md)
 - [Multi-Format Code and Document Parsing](features/multi-format-parsing.md)
 - [Unified Allow/Deny URI Grants and Database-Backed Project Discovery](features/project-registry-and-status.md)
 - [Syntax-Aware Structural Code Chunking and Whitespace Normalization](features/syntax-aware-chunking.md)
@@ -36,7 +36,7 @@ _(no results)_
 <!-- loom view: accepted_feature_list -->
 
 - [Layout-Preserving Document Chunking](features/layout-preserving-chunking.md)
-- [Non-Local Content and Web URI Ingestion (Firecrawl)](features/web-and-nonlocal-content.md)
+- [Non-Local Content and Pluggable Web Fetch Backends](features/web-and-nonlocal-content.md)
 <!-- loom view: accepted_feature_list end -->
 
 ### Draft
@@ -82,6 +82,7 @@ _(no results)_
 - [Ingestion Concurrency - Workers Parse, Main Thread Embeds and Writes](adrs/ADR-021.md)
 - [Unified Error Envelope, HTTP Status Mapping and CLI Exit Codes](adrs/ADR-022.md)
 - [Ingestion Limits via Discovery Filters and Watch Admission Control](adrs/ADR-023.md)
+- [Pluggable Web Fetch Backend and Local-First (not Air-Gapped) Guarantee](adrs/ADR-024.md)
 <!-- loom view: adr_list end -->
 
 ## Roadmap (Open tasks)
@@ -91,10 +92,13 @@ _(no results)_
 - [Implement branch_mapping table schema and branch pruning lifecycle](tasks/branch-mapping-and-pruning.md)
 - [Implement the unified error envelope, status mapping and exit codes](tasks/error-contract.md)
 - [Spike native addon support under Bun (LanceDB, ONNX, Tree-sitter)](tasks/toolchain-spike-native-addons.md)
-- [Implement hardware acceleration provider selection and air-gap enforcement](tasks/air-gap-hardware-provider.md)
 - [Build Tree-sitter and LiteParse parser routing in @prag/daemon](tasks/daemon-parser-router.md)
 - [Implement pinned embedding model detection and prag reembed rebuild](tasks/embedding-model-migration.md)
 - [Implement LiteParse layout-preserving PDF/DOCX to Markdown pipeline](tasks/liteparse-document-pipeline.md)
-- [Implement Firecrawl-backed web ingestion with self-hosted endpoint support](tasks/web-ingestion-pipeline.md)
+- [Implement hardware acceleration provider selection and local-first enforcement](tasks/local-first-enforcement.md)
+- [Define the capability-negotiating web fetch backend interface](tasks/web-fetch-backend-interface.md)
+- [Implement the web URI ingestion pipeline on top of a fetch backend](tasks/web-ingestion-pipeline.md)
 - [Enforce project-scoped query and storage isolation across workspaces](tasks/workspace-isolation-enforcement.md)
+- [Implement the Exa web fetch backend](tasks/exa-backend.md)
+- [Implement the Firecrawl web fetch backend](tasks/firecrawl-backend.md)
 <!-- loom view: task_list end -->

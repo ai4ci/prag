@@ -1,6 +1,6 @@
 # prag 🚀
 
-`prag` (**Pragmatic RAG) is a fast, 100% local, air-gapped semantic search and RAG indexing engine for mixed codebases and documentation repositories. It is built specifically to handle high file churn, understand Git branches natively, and run completely within your local workstation's hardware perimeter.
+`prag` (**Pragmatic RAG) is a fast, local-first semantic search and RAG indexing engine for mixed codebases and documentation repositories. It is built specifically to handle high file churn, understand Git branches natively, and keep local content on the machine: parsing, chunking, embedding and storage all run inside your local workstation's hardware perimeter, and a full index-and-search cycle over local content works with the network unreachable.
 
 It utilizes **Tree-sitter** for syntax-aware code parsing, **@llamaindex/liteparse** for layout-aware document extraction, and **LanceDB** for embedded, column-oriented vector storage.
 
@@ -56,7 +56,9 @@ prag/
 - [ ] Scope search by `projectId` — `hybridSearch()` currently spans every indexed project.
 - [ ] Emit the unified error envelope from the daemon (ADR-022); only the CLI half exists.
 - [ ] Pinned embedding-model detection on `prag reembed` (ADR-015).
-- [ ] Firecrawl web ingestion, hardware-acceleration provider selection, Bun native-addon spike.
+- [ ] Web ingestion: the pluggable fetch-backend interface (ADR-024) and its `plain-fetcher` / Firecrawl / Exa backends.
+- [ ] Hardware-acceleration provider selection and local-first enforcement check.
+- [ ] Bun native-addon spike.
 - [ ] CI workflow at `.github/workflows/ci.yaml` (sandbox-protected; must be added on the host).
 
 ---
@@ -100,4 +102,4 @@ No separate process to launch: the MCP server runs inside the already-running (o
 
 ## 🔒 Security & Privacy
 
-`prag` is self-hosted and local by default. Telemetry, analytics, and usage reporting are omitted by design, unconditionally. With no web URIs registered, `prag` makes zero outbound network calls: your code strings, structural graphs, document text, and vector floats never leave your machine. Outbound calls happen only for URIs you explicitly grant with `prag watch https://...`, and the web fetcher can be pointed at a self-hosted instance for a fully local deployment (see ADR-012).
+`prag` is self-hosted and local by default. Telemetry, analytics, and usage reporting are omitted by design, unconditionally. Content that lives on your machine never leaves it: your code strings, structural graphs, document text, and vector floats are parsed, embedded and stored locally, and a local index-and-search cycle completes with the network unreachable. Outbound calls happen only for URIs you explicitly grant with `prag watch https://...`, through the web-fetch backend you selected (`plain-fetcher`, Firecrawl, or Exa — self-hosted or hosted), which `prag status` reports so the current egress path is always inspectable. Web fetching is the one part of prag that is not local-first, and it never involves a remote inference endpoint: embeddings stay local (see ADR-024, ADR-006).

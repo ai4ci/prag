@@ -44,7 +44,7 @@ teardown: POST /shutdown, wait for exit, rm -rf <tmp>
 | Unit / integration (default) | `fake:384` | Plumbing: chunk counts, vectorised-unit counts, dedup, branch pointers, project scoping, grant evaluation, GC, auth | Fast, offline, deterministic |
 | Retrieval quality (opt-in) | Real ONNX model (ADR-006) | Ranking and relevance only | Slow, needs model weights |
 
-Splitting the tiers is what lets `air-gap-hardware-provider.md`'s "zero outbound connections during index+search" assertion hold on a cold machine: the default tier never downloads a model.
+Splitting the tiers is what lets `local-first-enforcement.md`'s "zero outbound connections during index+search" assertion hold on a cold machine: the default tier never downloads a model.
 
 ## Fixture Corpus
 Fixtures live at `test/fixtures/` and are framework-agnostic files plus one builder script. Each exists to prove a specific documented behaviour:

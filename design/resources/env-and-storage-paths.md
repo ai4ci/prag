@@ -95,6 +95,9 @@ Every setting can be specified or overridden using environment variables prefixe
 | `PRAG_WORKER_POOL_SIZE` | `integer` | `1` | Parse/chunk/hash worker threads. Embedding and all database writes stay on the main thread regardless (ADR-021). |
 | `PRAG_MAX_FILE_BYTES` | `integer` | `2097152` | Files larger than this are skipped at discovery and counted as `tooLarge` in `prag status` (ADR-023). |
 | `PRAG_LOG_LEVEL` | `string` | `info` | Logging verbosity: `error`, `warn`, `info`, `debug`, `trace`. |
+| `PRAG_WEB_BACKEND` | `string` | `plain-fetcher` | Which `WebFetchBackend` performs web ingestion: `plain-fetcher`, `firecrawl`, or `exa` (ADR-024). No automatic fallback -- an unreachable or unknown id is a startup error. |
+| `PRAG_FIRECRAWL_URL` | `string` | *(unset)* | Self-hosted Firecrawl endpoint. Unset **with** `firecrawl` selected requires `PRAG_FIRECRAWL_API_KEY`, so a typo cannot quietly move egress to the hosted API. |
+| `PRAG_EXA_API_KEY` | `string` | *(unset)* | Exa API key. Exa is an index, not a crawler: it declares `fetch` + `search` and glob grants against it fail with `CRAWL_CAPABILITY_UNAVAILABLE` (ADR-024). |
 
 ---
 
@@ -130,6 +133,17 @@ If present at `~/.config/prag/config.json`, the daemon loads defaults from this 
     "webCooldownSeconds": 86400,
     "defaultSearchLimit": 5,
     "defaultSearchMode": "hybrid"
+  },
+  "web": {
+    "backend": "plain-fetcher",
+    "firecrawl": { "url": null, "apiKey": null },
+    "exa": { "apiKey": null }
   }
 }
 ```
+
+`web.backend` selects exactly one ingestion backend (`plain-fetcher` | `firecrawl` |
+`exa`); unknown or unreachable values fail at startup rather than falling back to
+another backend, since relocating egress silently is the failure ADR-024 exists to
+prevent. Credentials for a hosted backend are supplied here or by the env vars
+below; a hosted fetch backend never permits a hosted inference endpoint (ADR-006).

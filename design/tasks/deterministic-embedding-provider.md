@@ -33,5 +33,5 @@ Give the embedding pipeline a seam so tests can run offline, instantly, and dete
 
 ## Verification
 - Indexing the same fixture twice with `fake:384` produces identical `chunkHash` and identical vectors.
-- A full index-and-search cycle with `fake:384` makes zero outbound network connections and loads no model file. This is what makes `air-gap-hardware-provider.md`'s zero-connection assertion satisfiable on a cold machine.
+- A full index-and-search cycle with `fake:384` makes zero outbound network connections and loads no model file. This is what makes `local-first-enforcement.md`'s zero-connection assertion satisfiable on a cold machine.
 - Starting the daemon with `fake:384` against an index pinned to a real model fails with the ADR-015 mismatch error, and vice versa.

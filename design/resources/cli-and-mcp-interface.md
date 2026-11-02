@@ -20,7 +20,7 @@ If the daemon is not running when any CLI command is invoked:
 
 Set `PRAG_NO_SPAWN=1` to disable this entirely: the CLI then fails immediately with "no daemon running and PRAG_NO_SPAWN is set" rather than forking a detached process. For callers that manage daemon lifetime themselves, such as a test harness (ADR-019).
 
-`GET /health` also reports the daemon's resolved `root`, `dataDir`, `configDir` and `runDir`, so a caller can confirm **which** instance it reached before invoking anything destructive (`prag reembed`, `prag prune --gc-chunks`). Paths only -- no indexed content or grant data.
+`GET /health` also reports the daemon's resolved `root`, `dataDir`, `configDir` and `runDir`, so a caller can confirm **which** instance it reached before invoking anything destructive (`prag reembed`, `prag prune --gc-chunks`). Paths only -- no indexed content or grant data. It also reports the active web-fetch `backend` (id + endpoint, or `null` when unset) so the current egress path is inspectable without reading config (ADR-024).
 
 ### Port Identity & API-Version Checks (ADR-016)
 Whenever the CLI finds something already listening on the configured port, it validates the `/health` response before trusting it -- **no automatic fallback to another port**:
