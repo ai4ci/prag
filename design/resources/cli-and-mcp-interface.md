@@ -200,8 +200,8 @@ Executes hybrid semantic vector + BM25 keyword search scoped to exactly one proj
       },
       "branch": {
         "type": "string",
-        "description": "Git branch context. Use '$default' for non-git projects and web content.",
-        "default": "$default"
+        "description": "Git branch context. Use '$default' for non-git projects and web content. Omitted: the branch the project's checkout is currently on.",
+        "default": "<the project's checked-out branch>"
       },
       "limit": {
         "type": "integer",
@@ -220,10 +220,16 @@ Executes hybrid semantic vector + BM25 keyword search scoped to exactly one proj
 }
 ```
 
+> **`branch` does not default to `$default`.** A git workspace's files are indexed under
+> their real branch, so an agent that trusted a `$default` default would receive an empty
+> result for the common case. The daemon reads `HEAD` for the registered root instead, and
+> every response echoes the `branch` actually applied so the scope is visible rather than
+> assumed. Passing `branch: "$default"` still works and means exactly what it says.
+
 ---
 
 ### Tool 1b: `search_all`
-Executes the same hybrid search, unscoped across every registered project (ADR-018). Reserved for explicit cross-project/personal-knowledge-base queries. It deliberately accepts **no** `projectId` -- a project filter here would just be `search_local` under another name.
+Executes the same hybrid search, unscoped across every registered project (ADR-018). It deliberately accepts **no** `projectId` -- a project filter here would just be `search_local` under another name -- and **no** `branch`: a branch identifies a version of *one* project's files, so a branch filter on a query that spans projects cannot mean anything, and accepting one that is silently ignored is the same widening the `projectId` rule exists to prevent. Results therefore span every branch of every project; the response's `branch` is `null` to say so.
 
 #### JSON-Schema Input Contract:
 ```json
@@ -237,16 +243,6 @@ Executes the same hybrid search, unscoped across every registered project (ADR-0
         "type": "string",
         "description": "Natural language question, logic description, function name, symbol, or error string."
       },
-      "branch": {
-        "type": "string",
-        "description": "Git branch context. Use '$default' for non-git projects and web content.",
-        "default": "$default"
-      },
-      "limit": {
-        "type": "integer",
-        "description": "Maximum number of distinct code chunks or document paragraphs to return.",
-        "default": 5
-      },
       "mode": {
         "type": "string",
         "enum": ["hybrid", "vector", "fts"],
@@ -258,6 +254,8 @@ Executes the same hybrid search, unscoped across every registered project (ADR-0
   }
 }
 ```
+
+> The `branch` property this contract formerly listed is not implemented -- see above.
 
 ---
 
@@ -305,13 +303,20 @@ Past `ingestion.watchConfirmThreshold` this **fails** with `WATCH_LIMIT_EXCEEDED
       },
       "cooldownSeconds": {
         "type": "integer",
-        "description": "Cooldown validity lease delta in seconds (default: 60 for local, null for web)."
+        "description": "Cooldown validity lease delta in seconds (default: the daemon's ingestion.cooldownMs)."
       }
     },
     "required": ["uri"]
   }
 }
 ```
+
+> **`confirm` is deliberately absent.** Past the threshold the tool fails and the human
+> escalates with `prag watch <uri> --yes`; a tool that accepted a confirmation flag would
+> let an agent waive the guard it is meant to report (ADR-023).
+>
+> `cooldownSeconds` is per-project, stored as `projects.defaultCooldownSeconds`, and the
+> watcher uses it instead of the daemon-wide `ingestion.cooldownMs` for that project's files.
 
 ---
 

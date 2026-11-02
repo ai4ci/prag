@@ -26,6 +26,7 @@ tested-by:
   - clitest:subprocess-e2e.test.ts#subprocessEndToEndSuite
   - coretest:errors.test.ts#errorCodeContractSuite
   - daemontest:error-envelope.test.ts#errorEnvelopeSuite
+  - daemontest:mcp-tools.test.ts#mcpPolicyToolSuite
 ---
 ## Objective
 Implement ADR-022 so failures have one shape across the HTTP API, the CLI and the MCP tools, and so tests assert on a stable `code` rather than on message text.
@@ -52,5 +53,11 @@ Done. Executed verification:
 - **Message rewording breaks nothing:** performed for real — `PROJECT_NOT_FOUND` and `REEMBED_IN_PROGRESS` messages were changed to nonsense and all 59 daemon tests still passed.
 - **No bare strings left:** `grep -rn 'res.end("' packages/daemon/src` matches only `res.end("[]")` (a valid empty JSON array). The MCP SSE 500 was the last prose body and now sends an envelope.
 - **`500` leaks nothing:** `sendInternal` logs the stack and answers generically (ADR-022 §4).
+
+The MCP side is asserted over a real JSON-RPC session
+(`packages/daemon/test/mcp-tools.test.ts`), not by calling `toolFailure` directly:
+`WATCH_LIMIT_EXCEEDED` and `PROJECT_NOT_FOUND` are checked as the agent receives
+them, including that `remedy` is present, since an agent can only act on a failure
+it can tell the user how to resolve.
 
 Not covered, deliberately: `CRAWL_CAPABILITY_UNAVAILABLE` has no producer yet — the fetch-backend plugin of ADR-024 that raises it is unimplemented, so it appears in the code set and mappings only. `DAEMON_IDENTITY_MISMATCH` is raised by the client (`daemon-client.ts`) and covered at the mapping level only.

@@ -2,14 +2,24 @@
 class: task
 id: mcp-server-endpoint.md
 title: Expose native HTTP/SSE Model Context Protocol (MCP) server endpoint in daemon
-status: in_progress
+status: done
 priority: medium
 relates-to:
   - feature:dual-interfaces.md
 addressed-by:
   - src:daemon/src/mcp-server.ts#McpHandler
+  - src:daemon/src/mcp-server.ts#toolFailure
+  - src:daemon/src/mcp-server.ts#McpOperations
+  - src:daemon/src/daemon.ts#watchUri
+  - src:daemon/src/daemon.ts#applyGrant
+  - src:daemon/src/daemon.ts#prune
+  - src:daemon/src/daemon.ts#statusFor
+  - src:daemon/src/daemon.ts#currentBranchFor
+  - src:daemon/src/ingestion-queue.ts#IngestionQueue.registerProject
+  - src:core/src/errors.ts#DaemonFailure
 tested-by:
   - daemontest:mcp-server.test.ts#mCPServerSuite
+  - daemontest:mcp-tools.test.ts#mcpPolicyToolSuite
 ---
 ## Objective
 Expose the Model Context Protocol (MCP) server directly inside `@prag/daemon` on the loopback HTTP/SSE endpoint `/mcp` (e.g. `http://127.0.0.1:7724/mcp`).
@@ -17,7 +27,7 @@ Expose the Model Context Protocol (MCP) server directly inside `@prag/daemon` on
 ## Implementation Details
 - Integrate `@modelcontextprotocol/sdk` utilizing the HTTP/SSE transport (`SSEServerTransport` / express/hono/node http handler).
 - Register MCP tools:
-  - `search_local` / `search_all`: Connect directly to the daemon's in-process `SearchEngine` (hybrid vector + BM25 RRF), scoped vs. unscoped respectively (ADR-018). `search_local` declares `projectId` as **required** -- the daemon has no access to an MCP caller's working directory, so a missing `projectId` is an error, never a silent widening to every project. `search_all` declares no `projectId` at all. `branch` defaults to `$default` on both.
+  - `search_local` / `search_all`: Connect directly to the daemon's in-process `SearchEngine` (hybrid vector + BM25 RRF), scoped vs. unscoped respectively (ADR-018). `search_local` declares `projectId` as **required** -- the daemon has no access to an MCP caller's working directory, so a missing `projectId` is an error, never a silent widening to every project. `search_all` declares no `projectId` at all. Branch scoping: see the deviations below.
   - `get_indexing_status`: Inspect watched workspace metadata, active branch, and chunk metrics.
   - `watch_uri`: Register allow grant and trigger immediate background indexing scan.
   - `deny_uri`: Register deny grant, exclude pattern from search, and halt watchers.
@@ -27,32 +37,41 @@ Expose the Model Context Protocol (MCP) server directly inside `@prag/daemon` on
 
 ## Implementation status
 
-Reverted from `done`: the SSE transport and three tools work, but four of the six
-required tools do not exist, and the one tool that advertises scoping does not scope.
+All eight tools are registered (`search_local`, `search_all`, `watch_uri`,
+`deny_uri`, `get_indexing_status`, `prune_index`, `list_grants`,
+`list_projects`) and driven end to end over a real JSON-RPC/SSE session by
+`packages/daemon/test/mcp-tools.test.ts`, including the ADR-022 envelope shape.
 
-- **Three tools registered, six required** (`packages/daemon/src/mcp-server.ts:72,116,147`:
-  `search_local`, `list_grants`, `list_projects`). MISSING: `search_all`,
-  `get_indexing_status`, `watch_uri`, `deny_uri`, `prune_index` — each grepped by name in
-  `packages/daemon/src`, no match. `list_grants`/`list_projects` are additions the
-  interface document does not list; keep them, they are not a substitute.
-- **`search_local` does not scope.** It declares `projectId` as required and echoes it into
-  the response payload without filtering on it (`mcp-server.ts:72-102`), because
-  `hybridSearch` accepts no project parameter (`packages/core/src/search.ts:53-58`). To an
-  agent this reads as enforcement while returning hits from every project — the exact
-  silent-widening failure the requirement forbids. Tracked as
-  `task:search-project-scoping.md`; also no `branch` handling, so `$default` is not applied.
-- **`prune_index` absence is load-bearing, not just missing surface.** Without it there is no
-  MCP path to GC, and the unlink/prune paths that *do* delete pool rows do so unconditionally
-  — see `issue:unlink-prune-deletes-shared-pool-rows.md`.
-- **MCP errors carry no code.** Failures return `{ content: [{ type: "text", text:
-  "Search error: ..." }], isError: true }` (`mcp-server.ts:100-110`, `:127-137`, `:161-171`),
-  violating the `code`+`message` requirement and `task:error-contract.md:28`.
+The policy tools call `Daemon` methods rather than reaching for the tables, which
+is what makes the two interfaces agree: `watchUri`, `applyGrant`, `prune` and
+`statusFor` throw `DaemonFailure`, the HTTP routes call the same methods, and
+`McpOperations` is the thunk object wiring them in. A tool that wrote a grant row
+directly would skip the cache invalidation, the purge from search and the unwatch
+`prag deny` performs (ADR-009 §4).
 
-Satisfied: `SSEServerTransport` per-connection (`mcp-server.ts:195`, concurrent sessions
-held in a `Map` at `:26`, no child processes), and the bearer check — `/mcp` is dispatched
-inside `_handle` after the auth gate (`packages/daemon/src/daemon.ts:265-278`) and is not on
-the `/health` exemption list.
+`prune_index` calls `Daemon.prune`, which sweeps `chunk_mapping`/`file_mapping`
+pointers, dead branches and unreferenced file versions, and only with
+`gcChunks: true` deletes from `chunks_pool` **and** `vector_pool` and compacts both
+(`gcUnreferencedChunks`), with ingestion drained and paused for the sweep.
 
-Remaining: add the four missing tools (with `WATCH_LIMIT_EXCEEDED` on `watch_uri` and
-`gcChunks` gating on `prune_index`), pass `projectId`/branch into search once
-`task:search-project-scoping.md` lands, and return structured error codes.
+## Deviations from the interface contract
+
+- **`search_local.branch` defaults to the checked-out branch, not `$default`.** A git
+  workspace's files are indexed under their real branch, so the documented default
+  would have returned nothing for the common case. The response echoes the applied
+  `branch` so the scope is visible rather than trusted.
+- **`search_all` has no `branch`.** A branch identifies a version of one project's
+  files; a filter spanning projects cannot mean anything, and accepting one silently
+  is the widening the `projectId` rule exists to prevent. Response `branch` is `null`.
+- **`watch_uri` has no `confirm`.** Past `ingestion.watchConfirmThreshold` it fails with
+  `WATCH_LIMIT_EXCEEDED` and the dry-run counts in `details`; only a human escalates
+  with `--yes` (ADR-023). Both recorded in `resource:cli-and-mcp-interface.md`.
+
+## Defects fixed on the way
+
+- **One `McpServer` per session.** The shared instance made every `GET /mcp` after the
+  first live stream answer 500: the SDK's `Protocol.connect` throws "Already connected
+  to a transport". Two agents on one daemon is the expected setup (ADR-019), so the
+  concurrency requirement was not actually met until this changed.
+- **Per-project cooldown.** `watch_uri`'s `cooldownSeconds` needed it; previously one
+  timer length from config applied to every project.

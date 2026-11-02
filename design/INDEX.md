@@ -119,7 +119,6 @@ _(no results)_
 - [Implement pinned embedding model detection and prag reembed rebuild](tasks/embedding-model-migration.md)
 - [Implement LiteParse layout-preserving PDF/DOCX to Markdown pipeline](tasks/liteparse-document-pipeline.md)
 - [Implement hardware acceleration provider selection and local-first enforcement](tasks/local-first-enforcement.md)
-- [Expose native HTTP/SSE Model Context Protocol (MCP) server endpoint in daemon](tasks/mcp-server-endpoint.md)
 - [Define the capability-negotiating web fetch backend interface](tasks/web-fetch-backend-interface.md)
 - [Implement the web URI ingestion pipeline on top of a fetch backend](tasks/web-ingestion-pipeline.md)
 - [Enforce project-scoped query and storage isolation across workspaces](tasks/workspace-isolation-enforcement.md)
