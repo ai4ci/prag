@@ -38,6 +38,12 @@ afterEach(async () => {
   await new Promise((r) => setImmediate(r));
 });
 
+/** Let pending watcher/worker work run, without asserting a fixed duration. */
+async function settle(rounds = 4): Promise<void> {
+  for (let i = 0; i < rounds; i++) await new Promise((r) => setImmediate(r));
+  await sleep(25);
+}
+
 function setup(cooldownMs = 100): TestCtx {
   const tmpDir = mkdtempSync(join(tmpdir(), "ingq-"));
   const ingested: ProcessResult[] = [];
@@ -58,6 +64,24 @@ function setup(cooldownMs = 100): TestCtx {
 
 // ── Tests ────────────────────────────────────────────────────────────
 
+/**
+ * Poll until `predicate` holds. Every test here waits on chokidar delivering an
+ * event and a worker finishing, which is unbounded: the fixed sleeps these used
+ * passed on an idle machine and failed under `npm test`, where three packages'
+ * suites contend for the same worker pool and event loop.
+ */
+async function waitFor(
+  what: string,
+  predicate: () => boolean,
+  timeoutMs = 5000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() > deadline) assert.fail(`timed out after ${timeoutMs}ms waiting for ${what}`);
+    await sleep(25);
+  }
+}
+
 function ingestionQueueSuite(): void {
   void it("discovers existing files on register", async () => {
     const { tmpDir, ingested, queue } = setup();
@@ -65,26 +89,17 @@ function ingestionQueueSuite(): void {
     writeFileSync(join(tmpDir, "existing.ts"), "export const a = 1;\n");
     queue.registerProject("test", tmpDir);
 
-    // Poll for up to 2s — chokidar's initial scan is async
-    for (let i = 0; i < 20; i++) {
-      if (ingested.some((r) => r.filePath.endsWith("existing.ts"))) break;
-      await sleep(100);
-    }
-
-    assert.ok(
-      ingested.some((r) => r.filePath.endsWith("existing.ts")),
-      "should discover existing.ts",
-    );
+    await waitFor("existing.ts", () => ingested.some((r) => r.filePath.endsWith("existing.ts")));
   });
 
   void it("processes newly added files", async () => {
     const { tmpDir, ingested, queue } = setup(50);
 
     queue.registerProject("test2", tmpDir);
-    await sleep(200);
+    await queue.scanComplete("test2");
 
     writeFileSync(join(tmpDir, "new.ts"), "export const b = 2;\n");
-    await sleep(500);
+    await waitFor("new.ts", () => ingested.some((r) => r.filePath.endsWith("new.ts")));
 
     const found = ingested.find((r) => r.filePath.endsWith("new.ts"));
     assert.ok(found, "should ingest new.ts");
@@ -98,7 +113,7 @@ function ingestionQueueSuite(): void {
     const { tmpDir, ingested, queue } = setup(200);
 
     queue.registerProject("test3", tmpDir);
-    await sleep(300);
+    await settle();
 
     const fp = join(tmpDir, "rapid.ts");
     writeFileSync(fp, "export const c = 1;\n");
@@ -106,7 +121,7 @@ function ingestionQueueSuite(): void {
     writeFileSync(fp, "export const c = 2;\n");
     await sleep(50);
     writeFileSync(fp, "export const c = 3;\n");
-    await sleep(500);
+    await waitFor("rapid.ts", () => ingested.some((r) => r.filePath.endsWith("rapid.ts")));
 
     const hits = ingested.filter((r) =>
       r.filePath.endsWith("rapid.ts") && r.chunks.length > 0
@@ -122,27 +137,30 @@ function ingestionQueueSuite(): void {
     const { tmpDir, ingested, queue } = setup(50);
 
     queue.registerProject("test4", tmpDir);
-    await sleep(200);
+    await settle();
 
     writeFileSync(join(tmpDir, "binary.bin"), Buffer.from([0x00, 0x01, 0x02, 0x03]));
-    await sleep(400);
-
+    // The counter is the positive signal; waiting for it is what makes the
+    // "not ingested" assertion mean something rather than merely run early.
+    await waitFor("the binary skip counter", () => queue.getSkipCounters("test4").binary === 1);
     assert.equal(
       ingested.some((r) => r.filePath.endsWith("binary.bin")),
       false,
       "binary files skipped",
     );
-    assert.equal(queue.getSkipCounters("test4").binary, 1);
   });
 
   void it("skips hidden files", async () => {
     const { tmpDir, ingested, queue } = setup(50);
 
     queue.registerProject("test5", tmpDir);
-    await sleep(200);
+    await settle();
 
     writeFileSync(join(tmpDir, ".secret.ts"), "export const hidden = 1;\n");
-    await sleep(400);
+    // Nothing is reported for a rejected hidden file, so there is no positive
+    // signal to poll for: wait long enough that chokidar would have delivered.
+    await settle();
+    await settle();
 
     assert.equal(
       ingested.some((r) => r.filePath.includes(".secret.ts")),
@@ -155,15 +173,14 @@ function ingestionQueueSuite(): void {
     const { tmpDir, ingested, queue } = setup(50);
 
     queue.registerProject("test6", tmpDir);
-    await sleep(200);
+    await settle();
 
     const fp = join(tmpDir, "todelete.ts");
     writeFileSync(fp, "export const d = 1;\n");
-    await sleep(200);
+    await waitFor("todelete.ts", () => ingested.some((r) => r.filePath.endsWith("todelete.ts")));
 
     rmSync(fp);
-    await sleep(400);
-
+    await settle();
     assert.ok(
       ingested.some((r) => r.filePath.endsWith("todelete.ts")),
       "deletion notified",
@@ -174,27 +191,22 @@ function ingestionQueueSuite(): void {
     const { tmpDir, ingested, queue } = setup(5000);
 
     queue.registerProject("test7", tmpDir);
-    await sleep(200);
+    await settle();
 
     writeFileSync(join(tmpDir, "flush.ts"), "export const e = 5;\n");
-    await sleep(100);
+    await settle();
     await queue.flushAll();
-    await sleep(300);
-
-    assert.ok(
-      ingested.some((r) => r.filePath.endsWith("flush.ts")),
-      "flushAll processes immediately",
-    );
+    await waitFor("flush.ts", () => ingested.some((r) => r.filePath.endsWith("flush.ts")));
   });
 
   void it("reports skip counters per project", async () => {
     const { tmpDir, queue } = setup(50);
 
     queue.registerProject("skip-test", tmpDir);
-    await sleep(200);
+    await settle();
 
     writeFileSync(join(tmpDir, "foo.bin"), Buffer.from([0x00, 0x01]));
-    await sleep(400);
+    await waitFor("the skip counter", () => queue.getSkipCounters("skip-test").binary === 1);
 
     const counters = queue.getSkipCounters("skip-test");
     assert.equal(counters.binary, 1);

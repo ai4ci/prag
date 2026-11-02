@@ -470,11 +470,10 @@ export class Daemon {
     // holds it — a file deleted on a feature branch is still indexed on main.
     const projectId = String(existing[0].projectId ?? "");
     const branch = await this.currentBranchFor(projectId);
+    const where = `projectId = '${projectId.replace(/'/g, "''")}' AND branch = '${branch.replace(/'/g, "''")}' AND uri = '${escaped}'`;
     await this.db
       .table("branch_mapping")
-      .delete(
-        `projectId = '${projectId.replace(/'/g, "''")}' AND branch = '${branch.replace(/'/g, "''")}' AND uri = '${escaped}'`,
-      );
+      .delete(where);
 
     for (const row of existing as Array<{ fileVersionId: string }>) {
       await this._retireVersionIfUnreferenced(String(row.fileVersionId));
@@ -1127,6 +1126,10 @@ export class Daemon {
       await withDeadline(flush, deadline, "flush");
       await withDeadline(this.awaitInflight(), deadline, "write");
 
+      // After every write has landed: the one moment a pointer can be judged
+      // against the whole tree rather than against one racing event.
+      const reconciledPointers = await this._reconcileBranchPointers(projectId);
+
       const failed = [...this._failed];
       this._failed.clear();
       const pending = queue.pendingCount();
@@ -1137,6 +1140,7 @@ export class Daemon {
       res.end(JSON.stringify({
         ok: pending === 0,
         flushedFiles: flushed,
+        reconciledPointers,
         pendingFiles: pending,
         failedFiles: failed,
         hadNewFailures: failed.length > failedBefore,
@@ -1481,6 +1485,75 @@ export class Daemon {
       watched: root !== undefined,
       ingestion: this.ingestionQueue?.stats() ?? null,
     };
+  }
+
+  /**
+   * Drop current-branch pointers whose file is gone, after a drain.
+   *
+   * An unlink cannot be trusted to be the last word. Chokidar reports the deletion
+   * while the write chain for the file's *earlier* add is still running, and
+   * `_handleUnlink` has to name a branch to delete from — so it reads `.git/HEAD`,
+   * which by then names whatever the user switched to. Observed in
+   * packages/daemon/test/branch-awareness.test.ts: `rm tempo.ts` on `feature` deleted
+   * `branch_mapping(branch='main', uri=tempo.ts)` — a row that did not exist — and
+   * left `feature`'s pointer behind permanently. Serialising the writes per path does
+   * not help: HEAD, not the write order, was what it got wrong.
+   *
+   * /sync is the documented reconciliation barrier
+   * (design/features/background-worker-queue.md:36), so this judges each project's
+   * pointers against the tree as it stands once every write has landed. Only the
+   * **current** branch's pointers are eligible: git-branch-awareness.md:37 promises
+   * "Other branches continue pointing to their respective historical fileVersionId",
+   * so a file missing from this checkout is normal for a branch not checked out, and
+   * branches that no longer exist are prune's business (ADR-017, explicit calls only).
+   * One stat per pointer, and nothing else is touched.
+   *
+   * Self-healing: a pointer dropped during a partial checkout comes back on the next
+   * drain, because `git checkout` rewrites mtimes and `_reconcile` queues anything
+   * modified since the last walk.
+   */
+  private async _reconcileBranchPointers(projectId?: string): Promise<number> {
+    if (!this.db) return 0;
+    const esc = (v: string): string => v.replace(/'/g, "''");
+
+    const roots = this.ingestionQueue?.registeredRoots() ?? [];
+    let removed = 0;
+
+    for (const [id, root] of roots) {
+      if (projectId && id !== projectId) continue;
+      // ADR-023: a paused project's index is frozen. Reconciling it would drop
+      // pointers for files a branch switch removed, and resume is meant to find
+      // the index as it was.
+      if (await this._projectPaused(id)) continue;
+      const branch = resolveBranch(root);
+      // $default has no branch identity to reconcile against: a non-git workspace
+      // cannot say whether a missing file was deleted or never existed, and
+      // `prag prune` is the documented way to drop an indexed-but-deleted file there.
+      if (branch === DEFAULT_BRANCH) continue;
+
+      const pointers = (await this.db.table("branch_mapping").query()
+        .filter(`projectId = '${esc(id)}' AND branch = '${esc(branch)}'`)
+        .limit(10000)
+        .toArray()) as Array<{ uri: string; fileVersionId: string }>;
+
+      for (const p of pointers) {
+        const path = p.uri.startsWith("file://") ? p.uri.slice(7) : p.uri;
+        try {
+          statSync(path);
+          continue; // still on this branch's tree
+        } catch {
+          /* gone: the pointer cannot stand */
+        }
+        await this.db.table("branch_mapping").delete(
+          `projectId = '${esc(id)}' AND branch = '${esc(branch)}' AND uri = '${esc(p.uri)}'`,
+        );
+        removed++;
+        // The version may still be held by another branch, which is the whole point
+        // of checking rather than deleting (issue:unlink-prune-deletes-shared-pool-rows).
+        await this._retireVersionIfUnreferenced(p.fileVersionId);
+      }
+    }
+    return removed;
   }
 
   /**

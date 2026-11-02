@@ -84,20 +84,29 @@ function branchAwarenessSuite(): void {
   }
 
   /**
-   * Wait for a state only the WATCHER can produce. `/sync` reconciles additions and
-   * changes against disk but deliberately not deletions (prune owns those), so a
-   * removed file disappears from the index when chokidar reports it — which is
-   * asynchronous and not covered by the drain barrier.
+   * Wait for a state the index only reaches once the queue has drained. `sync()`
+   * inside the probe rather than a sleep: chokidar's unlink is best-effort under
+   * load, and /sync is the barrier that reconciles pointers against the tree, so
+   * "drain, then look" is what a caller does (`prag sync && prag search`).
    */
   async function waitUntil(
     label: string,
     probe: () => boolean | Promise<boolean>,
+    diagnose?: () => Promise<string>,
   ): Promise<void> {
-    for (let i = 0; i < 100; i++) {
-      if (await probe()) return;
+    // Generous: returns as soon as the probe passes, but a git checkout under
+    // `npm test` -- three packages' suites contending for one worker pool, and a
+    // first tree-sitter parse that can take seconds -- needs far more than the 2s
+    // this allowed, and failed only in the full run.
+    const deadline = Date.now() + 20_000;
+    while (!(await probe())) {
+      if (Date.now() > deadline) {
+        assert.fail(
+          `timed out waiting for: ${label}${diagnose ? `\n  state: ${await diagnose()}` : ""}`,
+        );
+      }
       await new Promise((r) => setTimeout(r, 20));
     }
-    assert.fail(`timed out waiting for: ${label}`);
   }
 
   async function pointers(): Promise<Array<{ branch: string; uri: string; fv: string }>> {
@@ -252,9 +261,19 @@ function branchAwarenessSuite(): void {
     rmSync(join(ctx.repo, "tempo.ts"));
     git(ctx.repo, "commit", "-am", "drop tempo");
 
+    // Drained, not merely waited on: chokidar's unlink is best-effort under load
+    // (it dropped this one roughly once in five full `npm test` runs), and /sync is
+    // the documented reconciliation barrier. A caller's `prag sync && prag search`
+    // must not return a file that is gone, whatever the watcher did.
     await waitUntil(
       "the unlink drops that branch's pointer",
-      async () => (await pointers()).filter((p) => p.uri === "tempo.ts").length === 0,
+      async () => {
+        await sync();
+        return (await pointers()).filter((p) => p.uri === "tempo.ts").length === 0;
+      },
+      async () =>
+        `pointers=${JSON.stringify((await pointers()).map((p) => `${p.branch}:${p.uri}@${p.fv.slice(0, 6)}`))} ` +
+        `fm=${(await rows(ctx.schema!, "file_mapping")).map((r) => `${String(r.uri).split("/").pop()}=${String(r.fileVersionId).slice(0, 6)}`).join(",")}`,
     );
     await waitUntil(
       "the version is retired once no branch points at it",
@@ -265,6 +284,13 @@ function branchAwarenessSuite(): void {
       (await rows(ctx.schema!, "file_mapping")).some((r) => r.fileVersionId === featureFv),
       false,
       "once no branch points at it, the version is retired",
+    );
+    // The guarantee a caller actually relies on: after a drain, a deleted file is
+    // not searchable. Which mechanism removed the pointer is an implementation
+    // detail — that is the point of reconciling at /sync.
+    assert.ok(
+      !(await versions("feature")).some((v) => v.startsWith("tempo.ts")),
+      `deleted file still searchable: ${JSON.stringify(await versions("feature"))}`,
     );
     git(ctx.repo, "checkout", "main");
     await sync();
