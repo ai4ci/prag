@@ -102,6 +102,8 @@ export interface PragConfig {
     workerPoolSize?: number;
     maxFileBytes?: number;
     watchConfirmThreshold?: { projects: number; files: number };
+    /** ADR-019 bound on POST /sync (ms); default 60000. */
+    syncTimeoutMs?: number;
   };
   storage?: {
     dataDir?: string | null;

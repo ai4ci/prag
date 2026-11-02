@@ -49,6 +49,28 @@ export const MISMATCH_ALLOWED = new Set(["/health", "/reembed", "/shutdown"]);
 /** Chunks per embedBatch call when the caller does not override it. */
 const DEFAULT_EMBEDDING_BATCH = 32;
 
+/** ADR-019: how long POST /sync may take before it reports what is outstanding. */
+export const DEFAULT_SYNC_TIMEOUT_MS = 60_000;
+
+class SyncTimeoutError extends Error {
+  constructor(readonly phase: string) {
+    super(`sync ${phase} timed out`);
+  }
+}
+
+/** Reject once `deadline` has passed, and stop holding the timer open. */
+async function withDeadline(work: Promise<void>, deadline: number, phase: string): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new SyncTimeoutError(phase)), Math.max(0, deadline - Date.now()));
+  });
+  try {
+    await Promise.race([work, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export interface DaemonConfig {
   port?: number;
   token?: string;
@@ -57,6 +79,8 @@ export interface DaemonConfig {
     cooldownMs?: number;
     maxFileBytes?: number;
     poolSize?: number;
+    /** ADR-019 bound on POST /sync; default DEFAULT_SYNC_TIMEOUT_MS. */
+    syncTimeoutMs?: number;
   };
   /** Model id the daemon embeds with (resolved by bootstrap). */
   embeddingModel?: string;
@@ -205,7 +229,11 @@ export class Daemon {
     return tracked;
   }
 
-  /** Wait for ingestion writes currently in flight (one drain pass). */
+  /**
+   * Wait for ingestion writes currently in flight (one drain pass). Writes are not
+   * tracked per project, so a scoped /sync also waits for other projects' writes —
+   * stricter than required, never looser.
+   */
   private async awaitInflight(): Promise<void> {
     while (this._inflight.size > 0) {
       await Promise.allSettled([...this._inflight]);
@@ -619,35 +647,77 @@ export class Daemon {
     res.end(JSON.stringify({ projectId, rootUri, status: "active" }));
   }
 
-  private async _handleSync(_req: IncomingMessage, res: ServerResponse): Promise<void> {
+  private async _handleSync(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    let projectId: string | undefined;
+    const raw = await readBody(req).catch(() => null);
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw) as { projectId?: string };
+        if (typeof parsed.projectId === "string" && parsed.projectId.length > 0) {
+          projectId = parsed.projectId;
+        }
+      } catch {
+        /* an unparseable body is a drain-everything request */
+      }
+    }
+
     if (!this.ingestionQueue) {
-      res.writeHead(200);
+      res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ ok: true, flushedFiles: 0, pendingFiles: 0, failedFiles: [] }));
       return;
     }
 
+    const timeoutMs = this.config.ingestion?.syncTimeoutMs ?? DEFAULT_SYNC_TIMEOUT_MS;
+    const queue = this.ingestionQueue;
+    const failedBefore = this._failed.size;
+
     try {
-      // Drain until the queue and the writes it dispatched are both quiet, so a
-      // caller can search for a file immediately after /sync returns.
-      const before = this.ingestionQueue.pendingCount();
-      const failedBefore = this._failed.size;
-      await this.ingestionQueue.flushAll();
-      await this.awaitInflight();
+      // ADR-019: /sync is a drain barrier, so `prag sync && prag search` works.
+      // Bounded, because a wedged worker must not wedge the caller too — the
+      // worker's own job timeout eventually unwedges it (issue:worker-pool-…).
+      const deadline = Date.now() + timeoutMs;
+      // A fresh registration's initial scan may still be enumerating; draining
+      // before it has queued anything would report a false "drained".
+      const scan = queue.scanComplete(projectId);
+      if (scan) await withDeadline(scan, deadline, "initial scan");
+      let flushed = 0;
+      const flush = queue.flushAll(projectId).then((n) => { flushed = n; });
+      await withDeadline(flush, deadline, "flush");
+      await withDeadline(this.awaitInflight(), deadline, "write");
+
       const failed = [...this._failed];
       this._failed.clear();
+      const pending = queue.pendingCount();
 
-      const pending = this.ingestionQueue.pendingCount();
       res.writeHead(pending === 0 ? 200 : 202, {
         "Content-Type": "application/json",
       });
       res.end(JSON.stringify({
         ok: pending === 0,
-        flushedFiles: Math.max(0, before - pending),
+        flushedFiles: flushed,
         pendingFiles: pending,
         failedFiles: failed,
-        hadNewFailures: this._failed.size > 0 || failed.length > failedBefore,
+        hadNewFailures: failed.length > failedBefore,
       }));
     } catch (err) {
+      if (err instanceof SyncTimeoutError) {
+        // Named in the spec as 504/SYNC_TIMEOUT (storage-schema.md:423, ADR-019):
+        // name what is outstanding rather than hang or pretend success.
+        this.sendError(
+          res,
+          504,
+          "SYNC_TIMEOUT",
+          `${err.phase} did not finish within ${timeoutMs}ms`,
+          "Re-run `prag sync`, or raise ingestion.syncTimeoutMs / PRAG_SYNC_TIMEOUT_MS " +
+            "if a full drain legitimately takes longer on this corpus.",
+          {
+            timeoutMs,
+            pendingFiles: queue.pendingCount(),
+            pendingUris: queue.pendingUris(projectId).slice(0, 20),
+          },
+        );
+        return;
+      }
       this.sendError(res, 500, "SYNC_FAILED", (err as Error).message);
     }
   }

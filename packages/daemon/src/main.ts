@@ -63,7 +63,12 @@ export function loadConfig(): DaemonConfig {
         config.ingestion?.workerPoolSize ||
         DEFAULT_POOL_SIZE,
       maxFileBytes: config.ingestion?.maxFileBytes,
-      cooldownMs: config.server?.debounceMs,
+      cooldownMs: process.env.PRAG_DEBOUNCE_MS
+        ? Number(process.env.PRAG_DEBOUNCE_MS)
+        : config.server?.debounceMs,
+      syncTimeoutMs: process.env.PRAG_SYNC_TIMEOUT_MS
+        ? Number(process.env.PRAG_SYNC_TIMEOUT_MS)
+        : config.ingestion?.syncTimeoutMs,
     },
     embeddingModel: process.env.PRAG_EMBEDDING_MODEL || config.embedding?.model,
     maxVectorUnitTokens: config.embedding?.maxVectorUnitTokens,

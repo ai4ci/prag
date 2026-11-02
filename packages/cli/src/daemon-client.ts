@@ -69,7 +69,7 @@ export interface GrantInfo {
 
 export interface SyncResult {
   ok: boolean;
-  /** 202: work was still running when the drain deadline passed. */
+  /** HTTP 202: drained, but new events arrived meanwhile, so more is pending. */
   flushedFiles?: number;
   pendingFiles?: number;
   failedFiles?: string[];
@@ -370,9 +370,14 @@ export class DaemonClient {
 
   // ── Sync ─────────────────────────────────────────────────
 
-  async sync(): Promise<SyncResult> {
-    const { status, body } = await this._request("POST", "/sync");
-    if (status !== 200) throw parseError(status, body);
+  /**
+   * Drain barrier (ADR-019). Resolves once the queue is empty and the writes are
+   * committed; `ok: false` / HTTP 202 means events arrived faster than they could
+   * be written. A drain that hit its deadline is SYNC_TIMEOUT (HTTP 504).
+   */
+  async sync(projectId?: string): Promise<SyncResult> {
+    const { status, body } = await this._request("POST", "/sync", projectId ? { projectId } : undefined);
+    if (status !== 200 && status !== 202) throw parseError(status, body);
     return JSON.parse(body) as SyncResult;
   }
 

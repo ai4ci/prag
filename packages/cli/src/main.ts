@@ -341,7 +341,22 @@ export async function main(): Promise<void> {
   }
 
   if (cmd === "sync") {
-    const result = await daemonClient.sync();
+    let result: Awaited<ReturnType<DaemonClient["sync"]>>;
+    try {
+      result = await daemonClient.sync(getFlag(rest, "--project", "-p"));
+    } catch (err) {
+      // ADR-019: the drain is bounded, so say what is still outstanding instead
+      // of reporting a sync that did not happen. Exit 8 = timeout.
+      if (err instanceof DaemonError && err.code === "SYNC_TIMEOUT") {
+        const pending = err.details?.pendingFiles ?? "?";
+        const uris = (err.details?.pendingUris as string[] | undefined) ?? [];
+        console.error(`Error [SYNC_TIMEOUT]: ${err.message} (${pending} files still pending)`);
+        for (const uri of uris) console.error(`  pending: ${uri}`);
+        if (err.remedy) console.error(`Remedy: ${err.remedy}`);
+        process.exit(ExitCode.TIMEOUT);
+      }
+      throw err;
+    }
     console.log(`Sync complete (ok: ${result.ok})`);
     if (result.flushedFiles !== undefined) {
       console.log(`  flushed: ${result.flushedFiles} files`);

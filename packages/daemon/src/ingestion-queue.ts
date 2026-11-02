@@ -6,8 +6,8 @@
 
 import chokidar from "chokidar";
 import type { FSWatcher } from "chokidar";
-import { open, type FileHandle } from "node:fs/promises";
-import { resolve } from "node:path";
+import { open, readdir, stat, type FileHandle } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import { WorkerPool } from "./worker-pool.js";
 import { type ProcessResult } from "./worker-pool.js";
 
@@ -54,6 +54,14 @@ export class IngestionQueue {
   private dirty = new Map<string, IngestionQueueItem>(); // uri → latest event
   private cooldowns = new Map<string, ReturnType<typeof setTimeout>>(); // uri → timer
   private skipCounters = new Map<string, Record<string, number>>();
+  private readyPromises = new Map<string, Promise<void>>();
+  /** Registered root per project, for the pre-drain reconciliation walk. */
+  private projectDirs = new Map<string, string>();
+  /**
+   * Wall-clock of each project's last reconciliation walk. Files modified since
+   * then are queued even if the watcher never reported them.
+   */
+  private reconciledAt = new Map<string, number>();
   private inFlight = new Set<Promise<unknown>>();
   private _paused = false;
   private _heldEvents: Array<{
@@ -91,6 +99,15 @@ export class IngestionQueue {
       ignorePermissionErrors: true,
     });
 
+    // chokidar's `ready` marks the end of the initial scan. /sync must not report
+    // "drained" before it has even enumerated the tree, so expose the barrier.
+    let settleReady: () => void = () => {};
+    this.readyPromises.set(
+      projectId,
+      new Promise<void>((resolve) => { settleReady = resolve; }),
+    );
+    watcher.on("ready", settleReady);
+
     watcher.on("add", (filePath) => {
       if (!this._shouldIgnore(filePath)) {
         this._onEvent(projectId, filePath, "add");
@@ -116,6 +133,19 @@ export class IngestionQueue {
 
     this.watchers.set(projectId, watcher);
     this.skipCounters.set(projectId, {});
+    this.projectDirs.set(projectId, resolve(dirPath));
+    // Force the first drain to reconcile the whole tree.
+    this.reconciledAt.set(projectId, 0);
+  }
+
+  /**
+   * Resolves once the project's initial scan has finished and its events have
+   * been queued (not yet ingested). `undefined` for an unknown project.
+   */
+  scanComplete(projectId?: string): Promise<void> | undefined {
+    if (projectId) return this.readyPromises.get(projectId);
+    const all = [...this.readyPromises.values()];
+    return all.length > 0 ? Promise.all(all).then(() => {}) : undefined;
   }
 
   /** Unregister a project. */
@@ -124,6 +154,9 @@ export class IngestionQueue {
     watcher?.close();
     this.watchers.delete(projectId);
     this.skipCounters.delete(projectId);
+    this.readyPromises.delete(projectId);
+    this.projectDirs.delete(projectId);
+    this.reconciledAt.delete(projectId);
   }
 
   /** Stop all watchers. */
@@ -134,6 +167,9 @@ export class IngestionQueue {
       this.skipCounters.delete(projectId);
     }
     this.watchers.clear();
+    this.readyPromises.clear();
+    this.projectDirs.clear();
+    this.reconciledAt.clear();
     await Promise.allSettled(closers);
 
     // Clear pending cooldown timers
@@ -343,20 +379,36 @@ export class IngestionQueue {
    * Drain: dispatch everything queued, await the workers, then await the
    * writes they triggered. Only returns once the index reflects the disk, which
    * is what makes `prag sync && prag search` behave.
+   *
+   * `projectId` narrows the drain to one project (ADR-019); other projects keep
+   * their debounce timers, which is why the cooldown clear is filtered too.
+   *
+   * Returns how many files were dispatched for ingestion — the number /sync
+   * reports as `flushedFiles`. Counting `before - after` instead was wrong for a
+   * project whose initial scan had not queued anything yet: it read 0 pending at
+   * call time and then reported a drain that flushed nothing.
    */
-  async flushAll(): Promise<void> {
-    for (const [_uri, timer] of this.cooldowns) {
+  async flushAll(projectId?: string): Promise<number> {
+    // Trust the disk, not event delivery (see _reconcile).
+    await this._reconcile(projectId);
+
+    for (const [uri, timer] of this.cooldowns) {
+      if (projectId && this.dirty.get(uri)?.projectId !== projectId) continue;
       clearTimeout(timer);
+      this.cooldowns.delete(uri);
     }
-    this.cooldowns.clear();
 
-    const items = Array.from(this.dirty.values());
-    this.dirty.clear();
+    const items = Array.from(this.dirty.values()).filter(
+      (item) => !projectId || item.projectId === projectId,
+    );
+    for (const item of items) this.dirty.delete(item.uri);
 
+    let dispatched = 0;
     for (const item of items) {
       const pass = await this._checkFile(item.uri, item.projectId);
       if (!pass) continue;
 
+      dispatched++;
       this._dispatch(
         this.pool
           .processFile(item.projectId, item.uri)
@@ -365,5 +417,72 @@ export class IngestionQueue {
     }
 
     await this.drain();
+    return dispatched;
+  }
+
+  /**
+   * URIs still waiting to be written, optionally for one project. Only the
+   * queued ones are nameable — `inFlight` holds promises — so a stall inside a
+   * worker is reported by `pendingFiles` count rather than by name.
+   */
+  pendingUris(projectId?: string): string[] {
+    return [...this.dirty.values()]
+      .filter((item) => !projectId || item.projectId === projectId)
+      .map((item) => item.uri);
+  }
+
+  /**
+   * Queue every file on disk that the watcher has not reported since the last
+   * reconciliation, so a drain reflects the filesystem rather than whatever
+   * inotify happened to deliver.
+   *
+   * A drain can otherwise miss a file written microseconds earlier: the watcher
+   * is asynchronous, so /sync would find an empty dirty set and report "drained"
+   * while the file sat unindexed — and if the event is coalesced or dropped, it
+   * stays unindexed until the next touch. `prag sync && prag search` is the
+   * contract here, so the check is against disk, not against event delivery.
+   *
+   * Deletions are deliberately not reconciled: `prag prune` owns that.
+   *
+   * shortcut: stats the whole tree per drain, fine for the corpora prag indexes
+   * today; upgrade to watching a directory-mtime frontier if /sync gets slow.
+   */
+  private async _reconcile(projectId?: string): Promise<void> {
+    const ids = projectId ? [projectId] : [...this.projectDirs.keys()];
+    for (const id of ids) {
+      const dir = this.projectDirs.get(id);
+      if (!dir) continue;
+
+      const since = this.reconciledAt.get(id) ?? 0;
+      const now = Date.now();
+      this.reconciledAt.set(id, now);
+
+      const stack = [dir];
+      while (stack.length > 0) {
+        const current = stack.pop()!;
+        let entries;
+        try {
+          entries = await readdir(current, { withFileTypes: true });
+        } catch {
+          continue; // unreadable directory: the watcher reports it as `denied`
+        }
+        for (const entry of entries) {
+          const full = join(current, entry.name);
+          if (entry.isDirectory()) {
+            if (!this._shouldIgnore(full)) stack.push(full);
+            continue;
+          }
+          if (!entry.isFile() || this._shouldIgnore(full)) continue;
+          try {
+            const info = await stat(full);
+            // mtime, not content hash: hashing the tree per drain is worse, and a
+            // false positive just re-runs an idempotent ingestion.
+            if (info.mtimeMs > since) this._onEvent(id, full, "change");
+          } catch {
+            /* vanished between readdir and stat */
+          }
+        }
+      }
+    }
   }
 }
