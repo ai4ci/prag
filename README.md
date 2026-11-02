@@ -36,10 +36,11 @@ prag/
   Node fails at load with a native-addon error, not a friendly message.
 - **Linux or macOS.** Windows is untested.
 - **Disk/network for the default model.** The default embedder is a local ONNX model
-  (`Xenova/bge-small-en-v1.5`, ~130 MB) downloaded on first real embed and cached in the ONNX
-  runtime's cache, then reused offline. To try prag without any download, set
-  `PRAG_EMBEDDING_MODEL=fake:384` — a deterministic hash-based stand-in. Search quality is
-  meaningless with `fake:`, but the whole pipeline runs.
+  (`Xenova/bge-small-en-v1.5`, 34 MB quantized) downloaded on first real embed, then reused
+  offline. It caches under `node_modules/@huggingface/transformers/.cache/`, *not* under
+  `PRAG_ROOT` — so `npm ci` throws the download away, and two clones each fetch their own copy.
+  To try prag without any download, set `PRAG_EMBEDDING_MODEL=fake:384` — a deterministic
+  hash-based stand-in. Search quality is meaningless with `fake:`, but the whole pipeline runs.
 
 ### Install from source
 
