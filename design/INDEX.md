@@ -102,11 +102,6 @@ _(no results)_
 
 <!-- loom view: task_list -->
 
-- [Implement short-lived CLI client with lazy daemon spawning and HTTP queries](tasks/cli-read-only-search.md)
-- [Implement daemon local loopback HTTP server and lifecycle management](tasks/daemon-http-server-and-lifecycle.md)
-- [Implement injectable fake embedding provider (fake:<dim>)](tasks/deterministic-embedding-provider.md)
-- [Implement hybrid search with LanceDB BM25 FTS and Reciprocal Rank Fusion](tasks/hybrid-search-rrf.md)
-- [Implement discovery filters, skip reporting and watch admission control](tasks/ingestion-limits-and-admission.md)
 - [Implement the ingestion worker pool with main-thread embedding and writes](tasks/ingestion-worker-pool.md)
 - [Implement grants and projects tables with allow/deny evaluation and Chokidar filter integration](tasks/project-registry-and-exclusions.md)
 - [Maintain the test fixture corpus and git fixture builder](tasks/test-fixture-corpus.md)

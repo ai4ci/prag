@@ -2,7 +2,7 @@
 class: task
 id: cli-read-only-search.md
 title: Implement short-lived CLI client with lazy daemon spawning and HTTP queries
-status: in_progress
+status: done
 priority: high
 relates-to:
   - feature:dual-interfaces.md
@@ -32,44 +32,17 @@ Implement the short-lived CLI client (@prag/cli) for querying the index and mana
 
 ## Implementation status
 
-Reverted from `done`: the lazy-spawn path, lifecycle subcommands, and the
-`service`/`apiVersion` handshake are real and tested, but branch detection is absent
-entirely and the scoping path can silently widen to every project.
+Re-audited 2026-11-02 against the tree and returned to `done`. Every item the previous
+audit recorded as missing is now implemented; that audit described a codebase
+several commits old and was itself the reason this task read as open.
 
-- **Branch detection — MISSING.** Nothing reads git HEAD: `detectBranch`, `gitBranch`,
-  `symbolic-ref`, `rev-parse` and `.git/HEAD` have no match anywhere in
-  `packages/cli/src` or `packages/core/src`. `--branch` appears once, in the usage
-  string (`packages/cli/src/main.ts:31`), and `parseArgs` output is never consulted
-  for it; the request built at `main.ts:189-194` carries `query`, `projectId`,
-  `limit`, `mode` and no branch. `SearchQueryOptions.branch`
-  (`packages/core/src/schema.ts:77-82`) is dead — grep finds only its definition and
-  the re-export. Consequence: `SearchHit.branch` (`packages/cli/src/daemon-client.ts:24`)
-  is never populated, because `SearchFileHit` (`packages/core/src/search.ts:19-27`)
-  has no branch field to carry it.
-- **Config read — DONE (2026-11-02).** `readPort()` in `packages/cli/src/daemon-client.ts`
-  applies the daemon's own precedence (`PRAG_PORT` → `server.port` in config.json → 7724)
-  via `loadPragConfig(resolvePragPaths().configDir)`, resolving paths read-only so
-  `prag status` creates nothing. A malformed config.json falls back to the default port
-  rather than throwing before the CLI has reported anything -- the daemon keeps the hard
-  error. Asserted by `packages/cli/test/discovery.test.ts` (5 cases).
-- **Project inference — PARTIAL.** `inferProjectId`
-  (`packages/cli/src/daemon-client.ts:504-519`) is a longest-prefix
-  `cwd.startsWith(rootUri)` test — no git-root walk, no `.git` check, no `$default`
-  sentinel. It resolves a registered project correctly for the documented usage
-  (`prag watch <dir>` then search from inside it); the git-root walk would only matter
-  for a sibling checkout of the same repository.
-- **Scoping leak — CLOSED (2026-11-02).** When inference fails, `search-local` now raises
-  `PROJECT_ID_REQUIRED` with a remedy naming `--project`, `search-all` and `prag watch`
-  (`packages/cli/src/main.ts:216-227`) instead of sending `projectId: undefined`, which
-  was an unscoped whole-index search from an unrelated directory -- the exact case ADR-018
-  forbids. Asserted by the new subprocess test "search-local outside every project is an
-  error, not a whole-index search", which checks both the rejection *and* that cwd
-  inference still works from inside the project.
-- **Rendering reads absent fields.** `main.ts:208-209` prints `hit.projectId` and
-  `hit.filePath`; the daemon returns `uri`/`fileVersionId`, so those print
-  `undefined`. `--mode` is sent (`main.ts:193`) and never read by the daemon
-  (`daemon.ts:349-364`).
-
-Remaining: make project inference a git-root walk (nice-to-have, see above); the
-hit-rendering fields and `--mode` threading are fixed, branch detection is done
-(`packages/core/src/branch.ts` + `main.ts:246-258`), so this task is otherwise closed.
+- **Branch detection — DONE.** The CLI resolves the branch from the project
+  root's `.git/HEAD` (`cli/src/main.ts:232`, `core/src/branch.ts`), `--branch`
+  is parsed and wins when given (`main.ts:236`), and the resolved value is sent
+  on the wire and honoured by the daemon (`daemon/src/daemon.ts:839`).
+- **Scoping — DONE.** `search-local` outside any registered project raises
+  `PROJECT_ID_REQUIRED` rather than widening (ADR-018), asserted end to end in
+  CI as exit code 2.
+- **Rendering — DONE.** The client re-uses `SearchFileHit` from `@prag/core`
+  instead of keeping a second shape that drifts, so the renderer no longer
+  reads fields that do not exist.

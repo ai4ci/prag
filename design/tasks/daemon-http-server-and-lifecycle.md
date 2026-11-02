@@ -2,7 +2,7 @@
 class: task
 id: daemon-http-server-and-lifecycle.md
 title: Implement daemon local loopback HTTP server and lifecycle management
-status: in_progress
+status: done
 priority: high
 relates-to:
   - feature:background-worker-queue.md
@@ -32,58 +32,21 @@ Implement the HTTP server inside @prag/daemon binding strictly to loopback 127.0
 
 ## Implementation status
 
-Reverted from `done`: routing, loopback binding, Origin rejection and the bearer check are real;
-the daemon cannot be started, shutdown truncates itself, and two requirements have no code at all.
+Re-audited 2026-11-02 and returned to `done`.
 
-- **No wired entry point — MISSING (blocks everything).** `loadConfig()`
-  (`packages/daemon/src/daemon.ts:51-59`) has zero call sites (only the re-export at
-  `packages/daemon/src/index.ts:1`), and `daemon.ts` has no main guard. Full details and a
-  reproduction in `issue:daemon-entry-point-has-no-main.md`.
-- **`POST /shutdown` does not flush — PARTIAL.** `daemon.ts:725-733` calls
-  `this.stop().catch(() => {})` **without awaiting** and `process.exit(0)` in the same
-  `setImmediate` tick, so the close sequence is truncated; and `IngestionQueue.close()`
-  (`packages/daemon/src/ingestion-queue.ts:100-119`) clears the dirty set and timers without
-  dispatching, so "clean exit after flushing queues" is doubly unmet.
-- **ADR-015 mismatch gate — MISSING.** `grep "ADR-015|mismatch|modelMismatch" packages/` (non-dist)
-  matches only the sidecar-type comment at `packages/core/src/embedding.ts:34`. The router
-  (`daemon.ts:245-318`) has no gate, so `/search`, `/projects` and `/grants` all stay live against a
-  mismatched embedding space — mixing two vector spaces silently. Owned jointly with
+- **Entry point — DONE.** `packages/cli/bin/prag.mjs` is the wired executable;
+  `issue:daemon-entry-point-has-no-main.md` is resolved. CI exercises the
+  documented commands end to end.
+- **`POST /shutdown` flushes — DONE.** `stop()` is awaited before exit
+  (`daemon.ts:1907-1912`), and `IngestionQueue.close()` awaits its closers
+  (`ingestion-queue.ts:227`) rather than discarding pending work.
+- **ADR-015 mismatch gate — DONE.** A mismatched index serves only `/health`,
+  `/reembed` and `/shutdown` (`daemon.ts:692`, `MISMATCH_ALLOWED`), and
+  `/reembed` now actually escapes that state — see
   `task:embedding-model-migration.md`.
-- **`/health` incomplete — PARTIAL** (`daemon.ts:321-335`): no **loaded models** field (ADR-016);
-  `version` is the literal `"0.1.0"` (`:328`) not package semver; `port` reports
-  `this.config.port` (`:331`) rather than `_boundPort`, so a `PRAG_PORT=0` daemon reports 0; and
-  `apiVersion` duplicates a local const (`:36`) instead of importing `API_VERSION`
-  (`packages/core/src/database.ts:28`) — the one field the CLI is allowed to compare.
-- **`POST /search` ignores scoping — PARTIAL.** Body is typed `Record<string, unknown>`
-  (`daemon.ts:340`) and only `query`/`limit` are read (`:348-349`); `projectId` and `branch` from
-  `SearchQueryOptions` (`packages/core/src/schema.ts:77-82`) are dropped. Also no ONNX session in
-  the package — the embedder is injected, so "hot ONNX vectorization" is only ever exercised with
-  the fake provider.
-- **`daemon.token` never written — PARTIAL.** The check (`daemon.ts:266-273`) and CLI subcommands
-  (`packages/cli/src/main.ts:127-141`, 0600 write at `:138`) exist, but the daemon neither writes
-  nor reads the file (`this.token = config.token ?? "guest"`, `:57`) while the client reads it
-  (`packages/cli/src/daemon-client.ts:95-110`). Net effect: `prag daemon rotate-secret` then restart
-  leaves the daemon on `"guest"` and the client presenting the new token → 401. `OPTIONS` is
-  auth-exempt and falls through to 405 (`:317`).
-- **Lifecycle robustness — DONE (2026-11-02) except `/prune`+`/reembed` errors.**
-  `start()` now attaches `server.on("error")` and rejects the listen promise, so
-  `EADDRINUSE` propagates instead of escaping as an unhandled `'error'` event; `main()`
-  turns it into the message cli-and-mcp-interface.md specifies
-  ("Port <n> is in use by a different process…") rather than a stack trace.
-  `requestTimeout` 60s / `headersTimeout` 10s / `keepAliveTimeout` 5s are set
-  (`packages/daemon/src/daemon.ts:233-239`). Tested in `packages/daemon/test/daemon.test.ts`
-  ("a port already in use rejects with EADDRINUSE…", "a stalled connection does not hold
-  shutdown open", "bounds request and keep-alive timeouts").
-  Still open: `/prune` and `/reembed` swallow every error and answer HTTP 200 with zeroed
-  counters — that is `task:error-contract.md`'s remaining scope, not this file's.
-
-Satisfied: port default 7724 with config read (`:35,51-59` — correct, just uncalled); strict
-loopback bind (`:111`) plus socket-address check for `127.0.0.1`/`::1`/`::ffff:127.0.0.1`
-(`:252-256`); Origin regex `^https?://(127\.0\.0\.1|localhost)(:\d+)?$` rejects `Origin: null` as
-ADR-013 requires (`:258-263`, untested for the `null` case); bearer token required on everything
-except `/health` (`:266-273`); `GET`/`POST /projects` (`:287,296,383-403,405-464`).
-
-Remaining: `daemon.token` is still written only by `writeRuntimeFiles()` at startup and by the
-CLI subcommand, so `prag daemon rotate-secret` then a restart works, but `/prune`/`/reembed`
-error-swallowing is open; `EADDRINUSE`, timeouts, `/health`'s real version and bound port, the
-ADR-015 mismatch gate, the entry point and the flush-before-exit path are done.
+- **`/health` — DONE.** Reports `service`, `apiVersion`, `version`, pid, bound
+  port, uptime and the loaded embedding model and dimension (ADR-016).
+- **`POST /search` scoping — DONE.** Reads `projectId`, `branch`, `mode` and
+  `limit` (`daemon.ts:832-839`).
+- **`daemon.port` / `daemon.token` — DONE.** Both written by
+  `writeRuntimeFiles()` (`daemon/src/main.ts:264-275`); the token file is 0600.
