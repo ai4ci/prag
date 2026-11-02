@@ -7,7 +7,7 @@
 //
 // When PRAG_ROOT is set, an unset category never falls back to XDG.
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -125,4 +125,20 @@ export function loadPragConfig(configDir: string): PragConfig {
   // A malformed config.json is a hard error, not a silent default: falling back to
   // `{}` would start the daemon on the wrong port or model with no indication why.
   return JSON.parse(readFileSync(path, "utf-8")) as PragConfig;
+}
+
+/**
+ * Create the four resolved directories. `resolvePragPaths()` is deliberately pure
+ * — a test that resolves paths must not touch the filesystem — so whoever is about
+ * to *use* them calls this first.
+ *
+ * Before this, only `runDir` (daemon start) and `dataDir` (as a side effect of
+ * LanceDB connecting) were created, so `configDir` never existed: a user following
+ * env-and-storage-paths.md had to `mkdir ~/.config/prag` by hand before `config.json`
+ * would be read at all, and the file was silently ignored until they did.
+ */
+export function ensurePragDirs(paths: PragPaths): void {
+  for (const dir of [paths.dataDir, paths.configDir, paths.runDir, paths.logDir]) {
+    mkdirSync(dir, { recursive: true });
+  }
 }

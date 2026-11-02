@@ -2,10 +2,10 @@
 // @prag/cli — Command line interface for prag
 
 import { join } from "node:path";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import crypto from "node:crypto";
-import { resolveBranch, resolvePragPaths } from "@prag/core";
+import { ensurePragDirs, resolveBranch, resolvePragPaths } from "@prag/core";
 import { DaemonClient, DaemonError, ExitCode, exitForCode } from "./daemon-client.js";
 
 function usage(exitCode = ExitCode.USAGE): never {
@@ -160,8 +160,12 @@ export async function main(): Promise<void> {
         // Regenerate the token file
         const token = crypto.randomUUID();
         const paths = resolvePragPaths();
+        ensurePragDirs(paths);
         const tokenPath = join(paths.runDir, "daemon.token");
         writeFileSync(tokenPath, token, { mode: 0o600 });
+        // `mode` is ignored when the file already exists, so set it explicitly --
+        // same reason daemon/src/main.ts does this.
+        chmodSync(tokenPath, 0o600);
         console.log(`New token written to ${tokenPath}`);
         console.log(`Set PRAG_API_KEY=${token} in the daemon's environment and restart.`);
       } else {

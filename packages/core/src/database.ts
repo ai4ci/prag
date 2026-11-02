@@ -20,6 +20,8 @@ import {
   Float32,
   FixedSizeList,
   DateMillisecond,
+  Type,
+  type DataType,
   type Table as ArrowTableType,
 } from "apache-arrow";
 
@@ -125,7 +127,13 @@ function vectorPoolSchema(dim: number): Schema {
 export interface TableDefinition {
   name: string;
   schema: Schema;
-  primaryKey: string;
+  /**
+   * Uniqueness key, per storage-schema.md. LanceDB 0.41 has no primary-key
+   * option, so this is documentation of intent: the same keys are what the
+   * `mergeInsert` calls in the upsert* helpers enforce uniqueness with, and what
+   * `_ensureTable` compares against on an existing table.
+   */
+  primaryKey: string | string[];
   indexes?: Array<{
     column: string;
     /** Index config factory: Index.fts() for FTS, Index.ivfPq() for vector. */
@@ -147,7 +155,9 @@ export const ALL_TABLES: TableDefinition[] = [
   {
     name: "branch_mapping",
     schema: branchMappingSchema(),
-    primaryKey: "branch",
+    // Composite in storage-schema.md:117-119 -- (branch, projectId, uri): one row
+    // per file per branch, so the same uri may be held by several branches.
+    primaryKey: ["branch", "projectId", "uri"],
   },
   {
     name: "file_mapping",
@@ -157,7 +167,9 @@ export const ALL_TABLES: TableDefinition[] = [
   {
     name: "chunk_mapping",
     schema: chunkMappingSchema(),
-    primaryKey: "fileVersionId",
+    // storage-schema.md gives chunk_mapping no PK of its own; the pair is what
+    // makes a chunk's position within a file version unique.
+    primaryKey: ["fileVersionId", "chunkIndex"],
   },
   {
     name: "chunks_pool",
@@ -175,7 +187,9 @@ function vectorPoolDef(dim: number): TableDefinition {
   return {
     name: "vector_pool",
     schema: vectorPoolSchema(dim),
-    primaryKey: "chunkHash",
+    // Composite (chunkHash, unitIndex): a chunk that overflows one vector unit
+    // stores units 0..N under the same chunkHash, so chunkHash alone is not unique.
+    primaryKey: ["chunkHash", "unitIndex"],
     indexes: [
       {
         column: VECTOR_COLUMN,
@@ -183,6 +197,51 @@ function vectorPoolDef(dim: number): TableDefinition {
       },
     ],
   };
+}
+
+// ── Schema verification ───────────────────────────────────────────────
+
+/**
+ * A type identity that survives the Rust/JS boundary. `DataType.toString` is a
+ * method on the prototype, so it has to be derived from `typeId` plus whatever
+ * parameters the type carries — and those parameters are exactly what skew
+ * between builds (the vector dimension, an int width, a date unit).
+ */
+function typeKey(type: DataType): string {
+  const t = type as unknown as { typeId: number; listSize?: number; unit?: number; bitWidth?: number };
+  const base = Type[t.typeId] ?? `type#${t.typeId}`;
+  if (base === "FixedSizeList") return `${base}<${t.listSize}>`;
+  if (base === "Date" || base === "Interval") return `${base}(${t.unit})`;
+  if (base === "Int" || base === "Float" || base === "Decimal") return `${base}(${t.bitWidth})`;
+  return base;
+}
+
+/**
+ * Columns this build needs that the stored table does not have, in the shape
+ * `column "x" is Utf8?, want Utf8` / `missing column "x" (want …)` /
+ * `unexpected column "y"`.
+ *
+ * This check exists because LanceDB does not reject a mismatch: `add()` on a
+ * `FixedSizeList(4)` column silently *truncates* an 8-element vector to 4 (and
+ * only rejects a short one, as a NaN error), so an index written by an older
+ * build would keep accepting writes with the wrong embeddings rather than
+ * failing. Search over those vectors returns confidently ranked nonsense.
+ */
+export function schemaDiff(want: Schema, got: Schema): string[] {
+  const keys = (s: Schema): Map<string, string> =>
+    new Map(s.fields.map((f) => [f.name, `${typeKey(f.type)}${f.nullable ? "?" : ""}`]));
+  const w = keys(want);
+  const g = keys(got);
+  const out: string[] = [];
+  for (const [name, type] of w) {
+    const have = g.get(name);
+    if (have === undefined) out.push(`missing column "${name}" (want ${type})`);
+    else if (have !== type) out.push(`column "${name}" is ${have}, want ${type}`);
+  }
+  for (const name of g.keys()) {
+    if (!w.has(name)) out.push(`unexpected column "${name}"`);
+  }
+  return out;
 }
 
 // ── Database wrapper ──────────────────────────────────────────────────
@@ -197,6 +256,10 @@ export class LanceDbSchema {
       dbPath: config.dbPath,
       embeddingDim: config.embeddingDim ?? DEFAULT_EMBEDDING_DIM,
       maxVectorUnitTokens: config.maxVectorUnitTokens ?? 400,
+      // shortcut: 512 is the bge-small figure, and the ADR-014 gate cannot fire
+      // without a real value. Every production caller passes the provider's own
+      // maxSeqLength (packages/daemon/src/main.ts); a caller that omits this gets
+      // the pre-ADR-014 behaviour. Upgrade by making it required.
       modelMaxSeqLength: config.modelMaxSeqLength ?? 512,
     };
   }
@@ -273,7 +336,18 @@ export class LanceDbSchema {
     existing: Set<string>,
   ): Promise<void> {
     if (existing.has(def.name)) {
-      this._tables.set(def.name, await this._db!.openTable(def.name));
+      const table = await this._db!.openTable(def.name);
+      const diff = schemaDiff(def.schema, await table.schema());
+      if (diff.length > 0) {
+        throw new Error(
+          `Table "${def.name}" was written by an incompatible prag version: ` +
+            `${diff.join("; ")}. This build expects\n  ` +
+            def.schema.fields.map((f) => `${f.name}: ${typeKey(f.type)}`).join(", ") +
+            `\nRefusing to read or write it -- repair requires a schema migration or a fresh ` +
+            `index (remove ${this.config.dbPath} and re-index).`,
+        );
+      }
+      this._tables.set(def.name, table);
       return;
     }
 

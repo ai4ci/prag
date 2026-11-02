@@ -16,6 +16,7 @@ import {
   resolveEmbeddingModel,
   writeEmbeddingSidecar,
   loadPragConfig,
+  ensurePragDirs,
   resolvePragPaths,
   DEFAULT_MAX_VECTOR_UNIT_TOKENS,
   type EmbeddingProvider,
@@ -46,6 +47,10 @@ const DEFAULT_POOL_SIZE = 1;
  */
 export function loadConfig(): DaemonConfig {
   const paths = resolvePragPaths();
+  // Before reading config.json: nothing else creates configDir, so on a fresh
+  // machine the documented config file was never picked up (and logDir never
+  // existed either). Idempotent.
+  ensurePragDirs(paths);
   const config = loadPragConfig(paths.configDir);
 
   const port =

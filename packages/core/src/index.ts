@@ -19,6 +19,7 @@ export {
   LanceDbSchema,
   API_VERSION,
   ALL_TABLES,
+  schemaDiff,
   upsertGrants,
   upsertProjects,
   upsertBranchMapping,
@@ -123,6 +124,7 @@ export {
 
 export {
   resolvePragPaths,
+  ensurePragDirs,
   loadPragConfig,
   type PragPaths,
   type PragConfig,
