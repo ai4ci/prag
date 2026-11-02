@@ -38,12 +38,27 @@ export interface HealthResponse {
   dataDir: string;
   configDir: string;
   runDir: string;
+  embeddingModel?: string;
+  embeddingDim?: number;
+  /** Live ingestion counters, absent when ingestion is disabled. */
+  ingestion?: {
+    projects: number;
+    dirty: number;
+    cooling: number;
+    inFlight: number;
+    perProject: Record<string, Record<string, number>>;
+  } | null;
 }
 
 export interface ProjectInfo {
   projectId: string;
   rootUri: string;
   status: string;
+  /**
+   * Per-scan skip counters by reason (`tooLarge`, `binary`, `empty`, `denied`).
+   * In-memory on the daemon, deliberately not in the `projects` schema (ADR-023).
+   */
+  skipped: Record<string, number>;
 }
 
 export interface GrantInfo {

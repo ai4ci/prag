@@ -6,6 +6,7 @@ import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { startTestDaemon, stopTestDaemon, buildFixtures } from "@prag/daemon";
 import { runCLI } from "../src/test-runner.js";
+import { summarizeSkipped } from "../src/main.js";
 import type { TestDaemonInstance } from "@prag/daemon";
 
 function cLIEndToEndSuite(): void {
@@ -24,6 +25,18 @@ function cLIEndToEndSuite(): void {
 
   after(async () => {
     await stopTestDaemon(inst);
+  });
+
+  void it("formats skip counters the way `prag status` prints them", () => {
+    // ADR-023 hinges on a user being able to read these; the formatting is the
+    // user-visible half of that contract.
+    assert.equal(
+      summarizeSkipped({ tooLarge: 40, binary: 1163 }),
+      "1,203 skipped (40 tooLarge, 1,163 binary)",
+    );
+    assert.equal(summarizeSkipped({}), "");
+    assert.equal(summarizeSkipped(undefined), "");
+    assert.equal(summarizeSkipped({ binary: 0 }), "");
   });
 
   void it("daemon status returns running info", async () => {

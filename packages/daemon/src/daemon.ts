@@ -543,16 +543,21 @@ export class Daemon {
 
     try {
       const rows = await this.db.table("projects").query().limit(1000).toArray();
-      const projects = (rows as Array<Record<string, unknown>>).map((row) => ({
-        projectId: row.projectId,
-        rootUri: row.rootUri,
-        status: row.status,
-      }));
+      const projects = (rows as Array<Record<string, unknown>>).map((row) => {
+        const projectId = String(row.projectId);
+        return {
+          projectId,
+          rootUri: row.rootUri,
+          status: row.status,
+          // Per-scan, in-memory skip counters (ADR-023): the only way a user can
+          // tell "deliberately skipped" from "missing because of a bug".
+          skipped: this.ingestionQueue?.getSkipCounters(projectId) ?? {},
+        };
+      });
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify(projects));
-    } catch {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end("[]");
+    } catch (err) {
+      this.sendError(res, 500, "INTERNAL", `could not list projects: ${(err as Error).message}`);
     }
   }
 

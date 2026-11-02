@@ -36,6 +36,18 @@ Options:
   process.exit(exitCode);
 }
 
+/** "1,203 skipped (40 too large, 1,163 binary)" — or "" when nothing was skipped. */
+export function summarizeSkipped(counters: Record<string, number> | undefined): string {
+  if (!counters) return "";
+  const entries = Object.entries(counters).filter(([, n]) => n > 0);
+  if (entries.length === 0) return "";
+  const total = entries.reduce((sum, [, n]) => sum + n, 0);
+  const detail = entries
+    .map(([reason, n]) => `${n.toLocaleString("en-US")} ${reason}`)
+    .join(", ");
+  return `${total.toLocaleString("en-US")} skipped (${detail})`;
+}
+
 function parseArgs(): Record<string, string[]> {
   const args = process.argv.slice(2);
   const positional: string[] = [];
@@ -293,6 +305,8 @@ export async function main(): Promise<void> {
     }
     for (const p of projects) {
       console.log(`${p.projectId.padEnd(30)} ${p.status.padEnd(10)} ${p.rootUri}`);
+      const skipped = summarizeSkipped(p.skipped);
+      if (skipped) console.log(`${" ".repeat(30)} ${skipped}`);
     }
     return;
   }
@@ -308,6 +322,20 @@ export async function main(): Promise<void> {
       console.log(`Daemon running (PID ${h.pid}, API v${h.apiVersion})`);
       console.log(`Root: ${h.root ?? "(none)"}`);
       console.log(`Data: ${h.dataDir}`);
+      if (h.embeddingModel) {
+        console.log(`Embedding: ${h.embeddingModel} (${h.embeddingDim}d)`);
+      }
+      if (h.ingestion) {
+        const i = h.ingestion;
+        console.log(`Ingestion: ${i.projects} watched, ${i.dirty} queued, ` +
+          `${i.inFlight} in flight, ${i.cooling} cooling`);
+        // ADR-023: skipped-by-design has to be visible, or a user cannot tell
+        // "excluded on purpose" from "silently missing".
+        for (const [projectId, counters] of Object.entries(i.perProject)) {
+          const skipped = summarizeSkipped(counters);
+          if (skipped) console.log(`  ${projectId}: ${skipped}`);
+        }
+      }
     }
     return;
   }

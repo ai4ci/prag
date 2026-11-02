@@ -15,7 +15,8 @@ function daemonWithIngestionSuite(): void {
     projectDir: string;
     schema: LanceDbSchema | null;
     daemon: Daemon | null;
-  } = { tmpDir: "", projectDir: "", schema: null, daemon: null };
+    searchedPort: number | null;
+  } = { tmpDir: "", projectDir: "", schema: null, daemon: null, searchedPort: null };
 
   after(async () => {
     await ctx.daemon?.stop();
@@ -42,13 +43,26 @@ function daemonWithIngestionSuite(): void {
       port: 0,
       token: "test-ingest",
       noExit: true,
-      ingestion: { poolSize: 1, cooldownMs: 50 },
+      ingestion: { poolSize: 1, cooldownMs: 50, maxFileBytes: 4096 },
     });
     await ctx.daemon.start(ctx.schema, new FakeEmbeddingProvider(4));
 
     const port = ctx.daemon.boundPort!;
 
-    // Register project
+    // A normal file, a file over maxFileBytes, and a file with a NUL byte in its
+    // first 8KB — the two deliberate exclusions ADR-023 says must be reportable.
+    writeFileSync(join(ctx.projectDir, "hello.ts"), [
+      "export function hello(): string {",
+      '  return "world";',
+      "}",
+    ].join("\n"));
+    writeFileSync(join(ctx.projectDir, "huge.ts"), Buffer.alloc(9000, 0x61));
+    writeFileSync(join(ctx.projectDir, "blob.bin"), Buffer.concat([
+      Buffer.from("\x00\x01\x02binary", "latin1"),
+      Buffer.alloc(64, 0x00),
+    ]));
+
+    // Register project (watcher starts its initial scan here)
     const reg = await fetch(`http://127.0.0.1:${port}/projects`, {
       method: "POST",
       headers: {
@@ -58,13 +72,6 @@ function daemonWithIngestionSuite(): void {
       body: JSON.stringify({ projectId: "e2e-test", rootUri: ctx.projectDir }),
     });
     assert.equal(reg.status, 200);
-
-    // Write a file
-    writeFileSync(join(ctx.projectDir, "hello.ts"), [
-      "export function hello(): string {",
-      '  return "world";',
-      "}",
-    ].join("\n"));
 
     // Wait for initial scan + cooldown
     await sleep(1500);
@@ -96,6 +103,41 @@ function daemonWithIngestionSuite(): void {
     assert.ok(
       uris.some((u) => u.endsWith("hello.ts")),
       `hello.ts not in results: ${uris.join(", ")}`,
+    );
+    assert.ok(
+      !uris.some((u) => u.endsWith("huge.ts") || u.endsWith("blob.bin")),
+      `a file skipped at discovery was indexed: ${uris.join(", ")}`,
+    );
+
+    ctx.searchedPort = port;
+  });
+
+  void it("reports discovery skip counters per project", async () => {
+    // The counters are only worth having if a *caller* can read them: the whole
+    // point of ADR-023's skip reporting is that `prag status` can tell a user a
+    // file was excluded on purpose. Counters alone were write-only.
+    const port = ctx.searchedPort!;
+    const res = await fetch(`http://127.0.0.1:${port}/projects`, {
+      headers: { Authorization: "Bearer test-ingest" },
+    });
+    assert.equal(res.status, 200);
+
+    const projects = (await res.json()) as Array<{
+      projectId: string;
+      status: string;
+      skipped: Record<string, number>;
+    }>;
+    const project = projects.find((p) => p.projectId === "e2e-test");
+    assert.ok(project, `e2e-test missing from ${JSON.stringify(projects)}`);
+    assert.equal(
+      project.skipped.tooLarge,
+      1,
+      `tooLarge counter missing: ${JSON.stringify(project.skipped)}`,
+    );
+    assert.equal(
+      project.skipped.binary,
+      1,
+      `binary counter missing: ${JSON.stringify(project.skipped)}`,
     );
   });
 }

@@ -9,8 +9,11 @@ relates-to:
 addressed-by:
   - src:daemon/src/ingestion-queue.ts#IngestionQueue
   - src:daemon/src/ingestion-queue.ts#IngestionConfig
+  - src:cli/src/main.ts#summarizeSkipped
 tested-by:
   - daemontest:ingestion-queue.test.ts#ingestionQueueSuite
+  - daemontest:ingestion-e2e.test.ts#daemonWithIngestionSuite
+  - clitest:e2e.test.ts#cLIEndToEndSuite
 ---
 ## Objective
 Implement ADR-023 so a single `prag watch ~/Git` cannot silently commit the machine to hours of indexing, and so anything excluded is visibly excluded.
@@ -80,8 +83,17 @@ counters, and admission control, pause enforcement and the rate cap do not exist
 Satisfied: `maxFileBytes` (default 2 MiB, `ingestion-queue.ts:57,146`) and NUL-in-first-8KB
 binary detection (`:156-160`) applied at discovery, before enqueue, with the file read once;
 counters are per-scan, in-memory, and correctly absent from the `projects` schema.
+**Skip reporting is now caller-visible** (2026-11-02): `GET /projects` returns each project's
+`skipped` map (`daemon.ts` `_handleListProjects`) and both `prag status` and `prag projects`
+render it via `summarizeSkipped` (`packages/cli/src/main.ts`) as
+`1,203 skipped (40 tooLarge, 1,163 binary)`. `prag status` additionally prints the live
+ingestion snapshot (`/health.ingestion`: watched / queued / in flight / cooling). Asserted by
+`daemontest:ingestion-e2e.test.ts` (registers a project containing an over-limit file and a
+NUL-byte file, then asserts `skipped.tooLarge === 1 && skipped.binary === 1` over HTTP, and that
+neither file is searchable) and `clitest:e2e.test.ts` for the formatting.
+`empty` is a fourth reason; `denied` increments only on the stat/open failure path and needs the
+grants gate below to be meaningful.
 
-Remaining: surface counters through `GET /projects` and `prag status`; implement the discovery
-dry run + threshold + `--yes` and the MCP `WATCH_LIMIT_EXCEEDED` variant; make the ingestion
+Remaining: implement the discovery dry run + threshold + `--yes` and the MCP `WATCH_LIMIT_EXCEEDED` variant; make the ingestion
 dispatch check `projects.status = 'paused'`; honour `workerPoolSize`/`batchSize` as the
 throughput bound; add the `denied` counter once grants gate admission.
