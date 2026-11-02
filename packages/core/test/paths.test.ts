@@ -1,8 +1,10 @@
-import { describe, it, beforeEach, afterEach } from "node:test";
+import { describe, it, after, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { resolvePragPaths } from "../src/paths.js";
+import { loadPragConfig, resolvePragPaths } from "../src/paths.js";
 
 // Save originals to restore
 const OENV = { ...process.env };
@@ -114,3 +116,42 @@ function resolvePragPathsSuite(): void {
   });
 }
 void describe("resolvePragPaths", resolvePragPathsSuite);
+
+// ── loadPragConfig ────────────────────────────────────────────────────
+
+function loadPragConfigSuite(): void {
+  const roots: string[] = [];
+  const fresh = (): string => {
+    const dir = mkdtempSync(join(tmpdir(), "prag-cfg-"));
+    roots.push(dir);
+    return dir;
+  };
+  after(() => {
+    for (const r of roots) rmSync(r, { recursive: true, force: true });
+  });
+
+  void it("reads config.json from the given directory", () => {
+    const dir = fresh();
+    writeFileSync(
+      join(dir, "config.json"),
+      JSON.stringify({ embedding: { model: "fake:128" }, server: { port: 8123 } }),
+    );
+    const cfg = loadPragConfig(dir);
+    assert.equal(cfg.embedding?.model, "fake:128");
+    assert.equal(cfg.server?.port, 8123);
+  });
+
+  void it("returns {} when the file is absent", () => {
+    assert.deepEqual(loadPragConfig(fresh()), {});
+  });
+
+  void it("a malformed config.json throws rather than silently defaulting", () => {
+    // The regression this guards: `require()` inside an ESM module threw inside a
+    // catch-all, so EVERY config.json read returned {} and every setting in the
+    // file — port, model, pool size — was inert with no symptom at all.
+    const dir = fresh();
+    writeFileSync(join(dir, "config.json"), "{ this is not json");
+    assert.throws(() => loadPragConfig(dir), SyntaxError);
+  });
+}
+void describe("loadPragConfig", loadPragConfigSuite);

@@ -113,18 +113,22 @@ export async function bootstrap(
   // resolveEmbeddingModel loads no weights; OnnxEmbeddingProvider defers until
   // first use, but dim/maxSeqLength are unknown until then.
   const provider = resolveEmbeddingModel(modelId);
+  const dbPath = dbPathFor(paths);
+
+  // Before load(): the sidecar comparison needs only the model id, and a user
+  // who is about to be told "this index was built with another model" must not
+  // first watch 130MB of weights download for a run that cannot serve them.
+  const sidecar = readEmbeddingSidecar(dbPath);
+  if (sidecar && sidecar.model !== provider.model && !options.allowMismatch) {
+    throw new EmbeddingMismatchError(sidecar.model, provider.model, dbPath);
+  }
+
   await provider.load?.();
 
   const maxTokens =
     config.maxVectorUnitTokens ??
     Math.min(DEFAULT_MAX_VECTOR_UNIT_TOKENS, provider.maxSeqLength);
   assertVectorUnitBudget(maxTokens, provider.maxSeqLength);
-
-  const dbPath = dbPathFor(paths);
-  const sidecar = readEmbeddingSidecar(dbPath);
-  if (sidecar && sidecar.model !== provider.model && !options.allowMismatch) {
-    throw new EmbeddingMismatchError(sidecar.model, provider.model, dbPath);
-  }
 
   const schema = new LanceDbSchema({
     dbPath,

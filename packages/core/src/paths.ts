@@ -7,6 +7,7 @@
 //
 // When PRAG_ROOT is set, an unset category never falls back to XDG.
 
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -119,13 +120,9 @@ export interface PragConfig {
 
 /** Load and parse config.json from the resolved config directory. */
 export function loadPragConfig(configDir: string): PragConfig {
-  try {
-    const { readFileSync, existsSync } = require("node:fs") as typeof import("node:fs");
-    const path = join(configDir, "config.json");
-    if (!existsSync(path)) return {};
-    const raw = readFileSync(path, "utf-8");
-    return JSON.parse(raw) as PragConfig;
-  } catch {
-    return {};
-  }
+  const path = join(configDir, "config.json");
+  if (!existsSync(path)) return {};
+  // A malformed config.json is a hard error, not a silent default: falling back to
+  // `{}` would start the daemon on the wrong port or model with no indication why.
+  return JSON.parse(readFileSync(path, "utf-8")) as PragConfig;
 }

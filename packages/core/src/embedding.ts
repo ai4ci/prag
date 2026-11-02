@@ -174,15 +174,30 @@ export function registerProvider(
   registry.set(prefix, factory);
 }
 
-/** Look up a provider by model string (e.g. "fake:384"). */
+/**
+ * Look up a provider by model string (e.g. "fake:384").
+ *
+ * The longest matching prefix wins, so a specific registration can override a
+ * general one regardless of registration order — `registerProvider` is the
+ * documented extension point, and a `onnx:Xenova/bge-small-en-v1.5` entry would
+ * otherwise lose to the built-in `onnx:` factory.
+ */
 export function getProvider(model: string): EmbeddingProvider {
+  let best: ProviderFactory | undefined;
+  let bestLen = -1;
   for (const [prefix, factory] of registry) {
-    if (model.startsWith(prefix)) return factory(model);
+    if (model.startsWith(prefix) && prefix.length > bestLen) {
+      best = factory;
+      bestLen = prefix.length;
+    }
   }
-  throw new Error(
-    `No embedding provider registered for model "${model}". ` +
-      `Available prefixes: ${[...registry.keys()].join(", ")}`,
-  );
+  if (!best) {
+    throw new Error(
+      `No embedding provider registered for model "${model}". ` +
+        `Available prefixes: ${[...registry.keys()].join(", ")}`,
+    );
+  }
+  return best(model);
 }
 
 // ── Default model ─────────────────────────────────────────────────
