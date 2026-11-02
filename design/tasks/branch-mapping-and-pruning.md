@@ -2,12 +2,18 @@
 class: task
 id: branch-mapping-and-pruning.md
 title: Implement branch_mapping table schema and branch pruning lifecycle
-status: in_progress
+status: done
 priority: high
 relates-to:
   - feature:git-branch-awareness.md
 tested-by:
-  - daemontest:daemon.test.ts#daemonSuite
+  - daemontest:branch-awareness.test.ts
+  - daemontest:prune-gc.test.ts
+  - coretest:branch.test.ts
+addressed-by:
+  - src:core/src/branch.ts
+  - src:core/src/database.ts#upsertBranchMapping
+  - src:daemon/src/daemon.ts
 ---
 ## Description
 Implement the 4th table in the LanceDB schema: `branch_mapping`.

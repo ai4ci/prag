@@ -2,10 +2,23 @@
 class: task
 id: search-project-scoping.md
 title: Scope search to a projectId through the daemon and hybridSearch
-status: in_progress
+status: done
 priority: high
 relates-to:
   - feature:workspace-isolation.md
+tested-by:
+  - coretest:search-scoping.test.ts
+  - daemontest:branch-awareness.test.ts
+addressed-by:
+  - src:core/src/search.ts#hybridSearch
+  - src:core/src/search.ts#HybridSearchOptions
+  - src:core/src/search.ts#scopeToBranch
+  - src:core/src/search.ts#SearchResult
+  - src:core/src/branch.ts#resolveBranch
+  - src:core/src/branch.ts#listGitBranches
+  - src:core/src/branch.ts
+  - src:daemon/src/daemon.ts
+  - src:cli/src/main.ts
 blocks:
   - task:workspace-isolation-enforcement.md
   - task:mcp-server-endpoint.md
