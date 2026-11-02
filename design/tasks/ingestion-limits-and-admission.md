@@ -17,6 +17,7 @@ tested-by:
   - daemontest:ingestion-e2e.test.ts#daemonWithIngestionSuite
   - daemontest:watch-admission.test.ts#watchAdmissionSuite
   - clitest:e2e.test.ts#cLIEndToEndSuite
+  - daemontest:config.test.ts#loadConfigSuite
 ---
 ## Objective
 Implement ADR-023 so a single `prag watch ~/Git` cannot silently commit the machine to hours of indexing, and so anything excluded is visibly excluded.
@@ -74,11 +75,18 @@ counters, and admission control, pause enforcement and the rate cap do not exist
   `paused`**: the watcher keeps firing and `_checkFile`/dispatch consult only
   `_shouldIgnore` and size/binary limits. Ingestion continues at full rate while paused, and
   `resume` is indistinguishable from never having paused.
-- **Rate cap — MISSING.** `ingestion.workerPoolSize` (`paths.ts:102`) and
-  `embedding.batchSize` (`paths.ts:97`) are read by nothing outside one hardcoded literal —
-  `const batchSize = 50` inside `/reembed` (`daemon.ts:671`). `WorkerPool` has no concurrency
-  term (grep `concurrency|maxWorkers|semaphore` in `packages/daemon/src/worker-pool.ts` → 0),
-  so queue depth alone bounds ingestion, which is what ADR-021 forbids.
+- **Rate cap — DONE (2026-11-02).** `embedding.batchSize` is read by `loadConfig()`
+  (`packages/daemon/src/main.ts:81`) and threaded to the embed loop
+  (`packages/daemon/src/daemon.ts:531-534`); the `const batchSize = 50` literal inside
+  `/reembed` is gone with the unit-windowing rewrite. `ingestion.workerPoolSize` now reaches
+  `new WorkerPool(...)` (`daemon.ts:204`) -- it previously fell through to
+  `DEFAULT_POOL_SIZE = 1` because `loadConfig` chained the two with `||`, which also made the
+  documented `0` ("watching disabled") unreachable from either knob; fixed to `??` with
+  `readIntEnv()` so `PRAG_WORKER_POOL_SIZE=0` means 0. Asserted by
+  `packages/daemon/test/config.test.ts` for all four cases (config value, explicit 0 from file,
+  explicit 0 from env, default).
+  Not done: `WorkerPool` still has no concurrency term -- queue depth bounds work in flight
+  per worker, which is a weaker cap than ADR-021 describes.
 - **Denied-reason counter never incremented.** `skipCounters` records `tooLarge` and
   `binary`; `denied` has no increment site, because denial happens nowhere on the ingestion
   path (grants are not consulted — see `task:project-registry-and-exclusions.md`).

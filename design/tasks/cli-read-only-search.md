@@ -14,6 +14,7 @@ addressed-by:
 tested-by:
   - clitest:daemon-client.test.ts#daemonClientSuite
   - clitest:e2e.test.ts#cLIEndToEndSuite
+  - clitest:discovery.test.ts#daemonDiscoverySuite
 ---
 ## Description
 Implement the short-lived CLI client (@prag/cli) for querying the index and managing the daemon.
@@ -45,27 +46,30 @@ entirely and the scoping path can silently widen to every project.
   the re-export. Consequence: `SearchHit.branch` (`packages/cli/src/daemon-client.ts:24`)
   is never populated, because `SearchFileHit` (`packages/core/src/search.ts:19-27`)
   has no branch field to carry it.
-- **Config read — PARTIAL.** `DaemonClient` resolves the port from
-  `process.env.PRAG_PORT ?? DEFAULT_PORT` (`packages/cli/src/daemon-client.ts:163`);
-  `loadPragConfig` is never imported in `packages/cli/src`. A `server.port` in
-  config.json is honoured by the daemon and ignored by the client, so a non-default
-  port only works if exported into the environment.
+- **Config read — DONE (2026-11-02).** `readPort()` in `packages/cli/src/daemon-client.ts`
+  applies the daemon's own precedence (`PRAG_PORT` → `server.port` in config.json → 7724)
+  via `loadPragConfig(resolvePragPaths().configDir)`, resolving paths read-only so
+  `prag status` creates nothing. A malformed config.json falls back to the default port
+  rather than throwing before the CLI has reported anything -- the daemon keeps the hard
+  error. Asserted by `packages/cli/test/discovery.test.ts` (5 cases).
 - **Project inference — PARTIAL.** `inferProjectId`
-  (`packages/cli/src/daemon-client.ts:399-414`) is a longest-prefix
+  (`packages/cli/src/daemon-client.ts:504-519`) is a longest-prefix
   `cwd.startsWith(rootUri)` test — no git-root walk, no `.git` check, no `$default`
-  sentinel.
-- **Scoping leak.** When inference fails, `search-local` sends
-  `projectId: undefined` (`main.ts:186` → serialised at `daemon-client.ts:303-310`),
-  which is exactly the ADR-018 case that must be `PROJECT_ID_REQUIRED`. It becomes a
-  silent whole-index search today because `hybridSearch` takes no project filter —
-  fixed by `task:search-project-scoping.md`, and this task's requirement line is only
-  met once that lands.
+  sentinel. It resolves a registered project correctly for the documented usage
+  (`prag watch <dir>` then search from inside it); the git-root walk would only matter
+  for a sibling checkout of the same repository.
+- **Scoping leak — CLOSED (2026-11-02).** When inference fails, `search-local` now raises
+  `PROJECT_ID_REQUIRED` with a remedy naming `--project`, `search-all` and `prag watch`
+  (`packages/cli/src/main.ts:216-227`) instead of sending `projectId: undefined`, which
+  was an unscoped whole-index search from an unrelated directory -- the exact case ADR-018
+  forbids. Asserted by the new subprocess test "search-local outside every project is an
+  error, not a whole-index search", which checks both the rejection *and* that cwd
+  inference still works from inside the project.
 - **Rendering reads absent fields.** `main.ts:208-209` prints `hit.projectId` and
   `hit.filePath`; the daemon returns `uri`/`fileVersionId`, so those print
   `undefined`. `--mode` is sent (`main.ts:193`) and never read by the daemon
   (`daemon.ts:349-364`).
 
-Remaining: implement git HEAD detection (with `--branch` override) and thread branch
-through the request; read config.json in the client; make project inference a git-root
-walk; return an error rather than an unscoped query when the project cannot be
-resolved; fix the hit rendering fields.
+Remaining: make project inference a git-root walk (nice-to-have, see above); the
+hit-rendering fields and `--mode` threading are fixed, branch detection is done
+(`packages/core/src/branch.ts` + `main.ts:246-258`), so this task is otherwise closed.

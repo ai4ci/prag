@@ -14,6 +14,7 @@ addressed-by:
 tested-by:
   - daemontest:daemon.test.ts#daemonSuite
   - daemontest:ingestion-e2e.test.ts#daemonWithIngestionSuite
+  - daemontest:config.test.ts#loadConfigSuite
 ---
 ## Description
 Implement the HTTP server inside @prag/daemon binding strictly to loopback 127.0.0.1.
@@ -64,10 +65,17 @@ the daemon cannot be started, shutdown truncates itself, and two requirements ha
   (`packages/cli/src/daemon-client.ts:95-110`). Net effect: `prag daemon rotate-secret` then restart
   leaves the daemon on `"guest"` and the client presenting the new token → 401. `OPTIONS` is
   auth-exempt and falls through to 405 (`:317`).
-- **Lifecycle robustness — MISSING.** No `server.on("error")`, so `EADDRINUSE` is an uncaught throw;
-  no explicit `requestTimeout`/`keepAliveTimeout`/idle handling (`grep` → 0). `/prune` and `/reembed`
-  swallow every error and answer HTTP 200 with zeroed counters (`daemon.ts:641-643`, `:690-692`),
-  which `task:error-contract.md` must fix.
+- **Lifecycle robustness — DONE (2026-11-02) except `/prune`+`/reembed` errors.**
+  `start()` now attaches `server.on("error")` and rejects the listen promise, so
+  `EADDRINUSE` propagates instead of escaping as an unhandled `'error'` event; `main()`
+  turns it into the message cli-and-mcp-interface.md specifies
+  ("Port <n> is in use by a different process…") rather than a stack trace.
+  `requestTimeout` 60s / `headersTimeout` 10s / `keepAliveTimeout` 5s are set
+  (`packages/daemon/src/daemon.ts:233-239`). Tested in `packages/daemon/test/daemon.test.ts`
+  ("a port already in use rejects with EADDRINUSE…", "a stalled connection does not hold
+  shutdown open", "bounds request and keep-alive timeouts").
+  Still open: `/prune` and `/reembed` swallow every error and answer HTTP 200 with zeroed
+  counters — that is `task:error-contract.md`'s remaining scope, not this file's.
 
 Satisfied: port default 7724 with config read (`:35,51-59` — correct, just uncalled); strict
 loopback bind (`:111`) plus socket-address check for `127.0.0.1`/`::1`/`::ffff:127.0.0.1`
@@ -75,6 +83,7 @@ loopback bind (`:111`) plus socket-address check for `127.0.0.1`/`::1`/`::ffff:1
 ADR-013 requires (`:258-263`, untested for the `null` case); bearer token required on everything
 except `/health` (`:266-273`); `GET`/`POST /projects` (`:287,296,383-403,405-464`).
 
-Remaining: add the entry point; await `stop()` and flush before exit; implement the ADR-015 gate;
-complete `/health` (loaded models, real version, bound port, shared `API_VERSION`); read the full
-`SearchQueryOptions`; write and read `daemon.token`; handle `EADDRINUSE` and timeouts.
+Remaining: `daemon.token` is still written only by `writeRuntimeFiles()` at startup and by the
+CLI subcommand, so `prag daemon rotate-secret` then a restart works, but `/prune`/`/reembed`
+error-swallowing is open; `EADDRINUSE`, timeouts, `/health`'s real version and bound port, the
+ADR-015 mismatch gate, the entry point and the flush-before-exit path are done.
