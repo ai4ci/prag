@@ -124,3 +124,10 @@ _(no results)_
 - [Implement the Exa web fetch backend](tasks/exa-backend.md)
 - [Implement the Firecrawl web fetch backend](tasks/firecrawl-backend.md)
 <!-- loom view: task_list end -->
+
+## Untested (tasks under way or done with no suite)
+
+<!-- loom view: untested_task_list -->
+
+_(no results)_
+<!-- loom view: untested_task_list end -->
