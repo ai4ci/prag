@@ -43,7 +43,7 @@ _(no results)_
 
 <!-- loom view: draft_feature_list -->
 
-_(no results)_
+- [Programmatic Client SDKs for TypeScript and Java](features/client-sdks.md)
 <!-- loom view: draft_feature_list end -->
 
 # Open Issues
