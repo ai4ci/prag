@@ -53,7 +53,29 @@ prag/
 - [x] Expose the native HTTP/SSE Model Context Protocol (MCP) server endpoint at `/mcp` directly inside `@prag/daemon` (see ADR-011).
 
 ### Known gaps
-- [ ] Scope search by `projectId` — `hybridSearch()` currently spans every indexed project.
+
+Correctness issues first — these can lose data or hang, and none of them are visible from the
+test suite because the suite runs the daemon in-process:
+
+- [ ] `@prag/daemon` has no executable entry point, so `prag daemon start` and lazy startup can
+      never succeed (`issue:daemon-entry-point-has-no-main.md`).
+- [ ] Unlink and prune delete shared `chunks_pool`/`vector_pool` rows without `--gc-chunks`, so
+      removing a file in one project can silently delete content another project still indexes
+      (`issue:unlink-prune-deletes-shared-pool-rows.md`).
+- [ ] `WorkerPool` respawns twice per crash and can dispatch to a dead worker, hanging ingestion
+      forever (`issue:worker-pool-double-respawn.md`).
+- [ ] `file_mapping` is not content-addressable: `contentHash` is written empty, `fileVersionId` is
+      random, and the `upsert*` helpers append, so nothing deduplicates
+      (`issue:file-level-cas-never-written.md`).
+- [ ] `POST /sync` returns before ingestion is written, so indexing cannot be asserted without
+      sleeping (`task:sync-drain-barrier.md`).
+
+Design requirements not yet implemented:
+
+- [ ] Scope search by `projectId`/branch — `hybridSearch()` currently spans every indexed project
+      and every branch (`task:search-project-scoping.md`).
+- [ ] Watcher admission ignores the grants engine; `deny` neither unwatches nor purges
+      (`task:project-registry-and-exclusions.md`).
 - [ ] Emit the unified error envelope from the daemon (ADR-022); only the CLI half exists.
 - [ ] Pinned embedding-model detection on `prag reembed` (ADR-015).
 - [ ] Web ingestion: the pluggable fetch-backend interface (ADR-024) and its `plain-fetcher` / Firecrawl / Exa backends.

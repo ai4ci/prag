@@ -6,7 +6,6 @@ status: open
 priority: high
 relates-to:
   - feature:git-branch-awareness.md
-  - feature:syntax-aware-chunking.md
 blocks:
   - task:branch-mapping-and-pruning.md
 ---

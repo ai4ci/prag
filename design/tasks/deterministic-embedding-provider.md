@@ -2,7 +2,7 @@
 class: task
 id: deterministic-embedding-provider.md
 title: Implement injectable fake embedding provider (fake:<dim>)
-status: done
+status: in_progress
 priority: high
 relates-to:
   - feature:test-harness-and-fixtures.md
@@ -35,3 +35,36 @@ Give the embedding pipeline a seam so tests can run offline, instantly, and dete
 - Indexing the same fixture twice with `fake:384` produces identical `chunkHash` and identical vectors.
 - A full index-and-search cycle with `fake:384` makes zero outbound network connections and loads no model file. This is what makes `local-first-enforcement.md`'s zero-connection assertion satisfiable on a cold machine.
 - Starting the daemon with `fake:384` against an index pinned to a real model fails with the ADR-015 mismatch error, and vice versa.
+
+## Implementation status
+
+Reverted from `done`: the provider itself is complete and correct, but nothing in production
+ever selects it — the seam exists and no code steps through it.
+
+- **Config/env selection — MISSING.** `getProvider()` (`packages/core/src/embedding.ts:136`) has
+  **zero** non-test callers (`grep -rn "getProvider|PRAG_EMBEDDING_MODEL|embedding.model"
+  packages --include=*.ts` matches only `embedding.ts`, its re-export, and
+  `core/test/embedding.test.ts`). `Daemon` accepts an already-built `embedder`
+  (`packages/daemon/src/daemon.ts:90`) and the only construction site is the in-process harness
+  (`packages/daemon/src/test-harness.ts:77`, `new FakeEmbeddingProvider(dim)`). So
+  `PRAG_EMBEDDING_MODEL=fake:384` and `embedding.model` are inert: there is no process to read
+  them, because the daemon has no entry point — `issue:daemon-entry-point-has-no-main.md`.
+- **Sidecar pinning — MISSING.** `EmbeddingSidecar` (`embedding.ts:36-42`) is a type with no
+  writer, reader, or path constant. Fake/real mixing is therefore undetected, which is exactly
+  what requirement 4 exists to prevent. Tracked as the missing gate in
+  `task:embedding-model-migration.md`.
+- **Verification — 0 of 3 met.** (a) no end-to-end double-index test in `packages/daemon/test/`;
+  determinism is asserted at unit level only (`coretest:embedding.test.ts#fakeEmbeddingProviderSuite`,
+  `coretest:chunker.test.ts`). (b) no zero-outbound-connection assertion exists anywhere
+  (`grep createConnection|socket|network packages/*/test` → no match). (c) no mismatch test —
+  `grep mismatch packages/daemon/src/daemon.ts` → no match.
+
+Satisfied: deterministic hash-derived vectors with no network/fs/model load
+(`embedding.ts:57-68`), `parseFakeDim` + `registerProvider` extension point (`:136`, tested
+`#getProviderRegisterProviderSuite`, `#parseFakeDimSuite`), explicit "plumbing only"
+documentation (`:57-58`), shipped in `src/` not test code and re-exported (`index.ts:41-42`),
+and `maxSeqLength = 512` declared (`:47,68`, tested) — though that value reaches neither the
+startup check nor a sidecar.
+
+Remaining: construct the provider from config/env in the daemon entry point; write and read the
+sidecar; add the three verification tests.
