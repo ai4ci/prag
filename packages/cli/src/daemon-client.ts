@@ -4,6 +4,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import {
   resolvePragPaths,
+  loadPragConfig,
   exitForCode,
   type SearchResult,
   type FailureCode,
@@ -130,6 +131,25 @@ function readToken(): string {
 }
 
 /**
+ * Port to talk to, with the daemon's own precedence: PRAG_PORT, then
+ * `server.port` in config.json, then the default. The CLI used to skip the middle
+ * step, so a reader who followed env-and-storage-paths.md and set `server.port`
+ * got a daemon on that port (it reads config.json) and a CLI knocking on 7724.
+ * Read-only on purpose — resolving paths must not create directories.
+ */
+function readPort(): number {
+  const env = Number(process.env.PRAG_PORT);
+  if (env) return env;
+  try {
+    return loadPragConfig(resolvePragPaths().configDir).server?.port || DEFAULT_PORT;
+  } catch {
+    // Malformed config.json is the daemon's hard error to raise, not ours;
+    // `prag status` should still report what it can.
+    return DEFAULT_PORT;
+  }
+}
+
+/**
  * Maps a transport-level failure onto a code, so a dead daemon and a rejected
  * request are distinguishable by `code` rather than by message text.
  *
@@ -207,7 +227,7 @@ export class DaemonClient {
     token?: string,
   ) {
     const port =
-      baseUrl === undefined ? Number(process.env.PRAG_PORT ?? DEFAULT_PORT) : this.#portFromUrl(baseUrl);
+      baseUrl === undefined ? readPort() : this.#portFromUrl(baseUrl);
     this.baseUrl = baseUrl ?? `http://127.0.0.1:${port}`;
     this.token = token ?? readToken();
   }
