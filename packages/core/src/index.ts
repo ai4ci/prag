@@ -67,6 +67,13 @@ export {
 } from "./search.js";
 
 export {
+  resolveBranch,
+  isGitWorkspace,
+  listGitBranches,
+  DEFAULT_BRANCH,
+} from "./branch.js";
+
+export {
   FakeEmbeddingProvider,
   getProvider,
   registerProvider,

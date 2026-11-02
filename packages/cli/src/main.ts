@@ -3,8 +3,9 @@
 
 import { join } from "node:path";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import crypto from "node:crypto";
-import { resolvePragPaths } from "@prag/core";
+import { resolveBranch, resolvePragPaths } from "@prag/core";
 import { DaemonClient, DaemonError, ExitCode, exitForCode } from "./daemon-client.js";
 
 function usage(exitCode = ExitCode.USAGE): never {
@@ -211,9 +212,25 @@ export async function main(): Promise<void> {
       projectId = flagProject || (await daemonClient.inferProjectId()) || undefined;
     }
 
+    // Branch context resolves on the client (cli-and-mcp-interface.md): the CLI has
+    // the cwd, the daemon does not. Explicit --branch wins; otherwise read .git/HEAD
+    // of the resolved project's root, falling back to the cwd. A non-git workspace
+    // resolves to '$default', and a search with no project stays unscoped rather than
+    // pretending a branch means something across repositories.
+    const flagBranch = getFlag(rest, "--branch", "-b");
+    let branch: string | undefined;
+    if (projectId) {
+      const root = await projectRootFor(projectId, daemonClient);
+      branch = flagBranch ?? resolveBranch(root ?? process.cwd());
+    } else if (flagBranch) {
+      console.error("--branch needs a project to scope to; use search-local --project <id>");
+      usage(ExitCode.USAGE);
+    }
+
     const result = await daemonClient.search({
       query,
       projectId,
+      branch,
       limit: isNaN(flagLimit) ? 5 : flagLimit,
       mode: flagMode,
     });
@@ -448,8 +465,26 @@ function normalizeUri(input: string): string {
 /** Extract a flag value from rest args. Looks for --long and -short forms. */
 /** Value-bearing flags, so their tokens can be dropped from the query string. */
 const VALUE_FLAGS = new Set([
-  "--project", "-p", "--limit", "-n", "--mode", "-m", "--uri", "-u",
+  "--project", "-p", "--limit", "-n", "--mode", "-m", "--uri", "-u", "--branch", "-b",
 ]);
+
+/**
+ * Filesystem root of a registered project, for reading its `.git/HEAD`.
+ * POST /projects stores `rootUri` as the caller sent it (daemon.ts:886), so it may
+ * be a bare path rather than a file URL; `inferProjectId` already decodes it this
+ * way and a search must not break on the difference. Null when the projectId is
+ * unknown to the daemon.
+ */
+async function projectRootFor(
+  projectId: string,
+  client: DaemonClient,
+): Promise<string | null> {
+  const match = (await client.listProjects()).find((p) => p.projectId === projectId);
+  if (!match) return null;
+  return match.rootUri.startsWith("file://")
+    ? fileURLToPath(match.rootUri)
+    : match.rootUri;
+}
 
 /**
  * The query words, with flags removed. `rest.join(" ")` silently made the flags

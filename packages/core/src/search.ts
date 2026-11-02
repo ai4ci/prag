@@ -5,6 +5,7 @@
 
 import { type Table } from "@lancedb/lancedb";
 import { type EmbeddingProvider } from "./embedding.js";
+import { DEFAULT_BRANCH } from "./branch.js";
 
 // ── Types ─────────────────────────────────────────────────────────────
 
@@ -31,6 +32,18 @@ export type SearchMode = "hybrid" | "vector" | "fts";
 export interface SearchResult {
   query: string;
   mode: SearchMode;
+  /**
+   * The branch the results were scoped to, echoed so a caller can see the scope it
+   * got rather than trust it. Null when the search spans branches.
+   */
+  branch: string | null;
+  /**
+   * File versions that matched, counted per project BEFORE the limit was applied
+   * (`{ projectId: count }`). So a scoped caller can see scoping happened and how
+   * much of the index the scope covered, rather than trusting it — a count of the
+   * returned slice would say the same thing as `hits.length`.
+   */
+  byProject: Record<string, number>;
   hits: SearchFileHit[];
   totalChunks: number;
 }
@@ -38,6 +51,15 @@ export interface SearchResult {
 export interface HybridSearchOptions {
   /** Restrict results to one project's files. Omitted = every project. */
   projectId?: string;
+  /**
+   * Branch whose `branch_mapping` pointers define the visible file versions.
+   * Only meaningful together with `projectId` — a branch identity belongs to one
+   * repository, so there is nothing to scope across projects. `$default` is the
+   * sentinel for workspaces with no branch.
+   */
+  branch?: string;
+  /** branch_mapping table, required when `branch` is set. */
+  branchMapping?: Table;
   limit?: number;
   /** Candidate pool per source before fusion (default 50). */
   candidateLimit?: number;
@@ -81,6 +103,13 @@ export async function hybridSearch(
   const mode = options.mode ?? "hybrid";
   const pool = options.candidateLimit ?? ftsLimit;
   const projectId = options.projectId;
+  const branchMapping = options.branchMapping;
+  if (options.branch && !(projectId && branchMapping)) {
+    throw new Error(
+      "branch scoping needs both projectId and the branchMapping table: a branch identifies a version of one project's files",
+    );
+  }
+  const branch = projectId && options.branch ? options.branch : undefined;
 
   // The query vector is computed once and reused across widening passes.
   const queryVector =
@@ -99,16 +128,25 @@ export async function hybridSearch(
     ]);
 
     const fused = fuseResults(ftsHits, vectorHits);
-    const fileHits = await mapToFiles(
+    const { hits: fileHits, byProject } = await mapToFiles(
       fused,
       chunkMapping,
       fileMapping,
       limit,
       projectId,
+      branch,
+      branchMapping,
     );
 
     if (fileHits.length >= limit || !projectId || fused.length < size) {
-      return { query, mode, hits: fileHits, totalChunks: fused.length };
+      return {
+        query,
+        mode,
+        branch: branch ?? null,
+        byProject,
+        hits: fileHits,
+        totalChunks: fused.length,
+      };
     }
     size *= 4;
   }
@@ -241,8 +279,10 @@ async function mapToFiles(
   fileMapping: Table,
   limit: number,
   projectId?: string,
-): Promise<SearchFileHit[]> {
-  if (chunks.length === 0) return [];
+  branch?: string,
+  branchMapping?: Table,
+): Promise<{ hits: SearchFileHit[]; byProject: Record<string, number> }> {
+  if (chunks.length === 0) return { hits: [], byProject: {} };
 
   // Batch lookup: get fileVersionId for each chunkHash
   const chunkHashes = chunks.map((c) => c.chunkHash);
@@ -266,7 +306,7 @@ async function mapToFiles(
     }
   }
 
-  if (fileChunks.size === 0) return [];
+  if (fileChunks.size === 0) return { hits: [], byProject: {} };
 
   // Lookup file info, scoped to one project when asked. The scope predicate
   // belongs here (not on the ANN/FTS query) because chunks_pool and vector_pool
@@ -311,5 +351,62 @@ async function mapToFiles(
     });
   }
 
-  return results.sort((a, b) => b.score - a.score).slice(0, limit);
+  const visible = branch && branchMapping
+    ? await scopeToBranch(results, branchMapping, projectId!, branch)
+    : results;
+
+  // Counted before the slice: "how many of the project's versions matched", not
+  // "how many I happened to return".
+  const byProject: Record<string, number> = {};
+  for (const r of visible) byProject[r.projectId] = (byProject[r.projectId] ?? 0) + 1;
+
+  return {
+    byProject,
+    hits: visible.sort((a, b) => b.score - a.score).slice(0, limit),
+  };
+}
+
+/**
+ * Keep the file versions a branch actually points at.
+ *
+ * The filter belongs here rather than on the ANN/FTS query because the candidate
+ * pool has already been fused: what a branch decides is which *file version* of a
+ * path is current, and the same chunkHash can be shared by several versions
+ * (identical content across branches is one CAS row, ADR-017).
+ *
+ * A branch also sees `$default`: content indexed before the workspace had a
+ * branch identity, and web content, is not another branch's history.
+ *
+ * A project with no pointers at all was indexed before branch tracking existed.
+ * Treating that as "everything is `$default`" is the only reading that is both
+ * true of the data and does not silently empty the index on upgrade.
+ */
+async function scopeToBranch(
+  results: SearchFileHit[],
+  branchMapping: Table,
+  projectId: string,
+  branch: string,
+): Promise<SearchFileHit[]> {
+  const esc = projectId.replace(/'/g, "''");
+  const branches = branch === DEFAULT_BRANCH
+    ? `'${DEFAULT_BRANCH}'`
+    : `'${branch.replace(/'/g, "''")}','${DEFAULT_BRANCH}'`;
+
+  const pointers = (await branchMapping
+    .query()
+    .filter(`projectId = '${esc}' AND branch IN (${branches})`)
+    .limit(10000)
+    .toArray()) as Array<Record<string, unknown>>;
+
+  if (pointers.length === 0) {
+    const any = await branchMapping
+      .query()
+      .filter(`projectId = '${esc}'`)
+      .limit(1)
+      .toArray();
+    if (any.length === 0) return results;
+  }
+
+  const current = new Set(pointers.map((p) => String(p.fileVersionId)));
+  return results.filter((r) => current.has(r.fileVersionId));
 }

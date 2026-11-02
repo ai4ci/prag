@@ -29,11 +29,22 @@ export const BUILTIN_IGNORED_BASENAMES = new Set([
   "__pycache__",
 ]);
 
-/** Hidden files are ignored; `.gitignore` is the one exception (ADR-023). */
+/**
+ * Hidden files are ignored; `.gitignore` is the one exception (ADR-023).
+ *
+ * Every path segment is tested, not just the basename: chokidar reports
+ * `/repo/.git/config` as a single event, and a basename-only test called that
+ * indexable — the daemon was indexing git's internals, including COMMIT_EDITMSG
+ * and loose refs, and they showed up in search results. Discovery already skips
+ * such directories by name while walking, so this makes the watcher agree with
+ * what a user confirmed before `watch`.
+ */
 export function isBuiltinIgnored(filePath: string): boolean {
-  const basename = filePath.split("/").pop() ?? "";
-  if (BUILTIN_IGNORED_BASENAMES.has(basename)) return true;
-  return basename.startsWith(".") && basename !== ".gitignore";
+  return filePath.split("/").some((segment) => {
+    if (!segment) return false;
+    return BUILTIN_IGNORED_BASENAMES.has(segment) ||
+      (segment.startsWith(".") && segment !== ".gitignore");
+  });
 }
 
 /** Why discovery excluded a file. `denied` means a grant refused it (ADR-009). */

@@ -73,7 +73,7 @@ export class McpHandler {
   }
 
   /** Shared search path so both tools build the candidate pool identically. */
-  private _search(query: string, limit: number, projectId?: string) {
+  private _search(query: string, limit: number, projectId?: string, branch?: string) {
     return hybridSearch(
       this.db.table("chunks_pool"),
       this.db.table("vector_pool"),
@@ -83,7 +83,12 @@ export class McpHandler {
       query,
       limit,
       undefined,
-      { projectId, mode: "hybrid" },
+      {
+        projectId,
+        branch,
+        branchMapping: this.db.table("branch_mapping"),
+        mode: "hybrid",
+      },
     );
   }
 
@@ -146,8 +151,15 @@ export class McpHandler {
           .optional()
           .default(10)
           .describe("Max file-level results"),
+        branch: z
+          .string()
+          .optional()
+          .describe(
+            "Restrict to one branch's file versions (plus '$default'). Omit to search " +
+              "every branch of the project; an MCP client knows its own checkout, the daemon cannot.",
+          ),
       },
-    }, async ({ query, projectId, limit }) => {
+    }, async ({ query, projectId, limit, branch }) => {
       try {
         if (!projectId) {
           // Optional in the schema so the failure arrives as an envelope with a
@@ -159,7 +171,7 @@ export class McpHandler {
           );
         }
         await assertProjectRegistered(this.db, projectId);
-        const result = await this._search(query, limit ?? 10, projectId);
+        const result = await this._search(query, limit ?? 10, projectId, branch);
         return {
           content: [
             {

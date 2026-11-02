@@ -29,6 +29,11 @@ import {
   upsertChunkMapping,
   upsertChunksPool,
   upsertVectorPool,
+  upsertBranchMapping,
+  resolveBranch,
+  isGitWorkspace,
+  listGitBranches,
+  DEFAULT_BRANCH,
   evaluateUriGrants,
   DaemonFailure,
   HTTP_STATUS_FOR_CODE,
@@ -280,6 +285,22 @@ export class Daemon {
     }
   }
 
+  /**
+   * Branch whose pointers new content belongs to, read from the project root's
+   * `.git/HEAD`. Deliberately uncached: `git checkout` rewrites HEAD and then the
+   * working tree within milliseconds, so any cache at all attributes the files the
+   * checkout touched to the branch you left. One stat + one read per file write is
+   * noise beside the DB round-trips it sits between.
+   *
+   * Non-git workspaces get `$default`.
+   */
+  private async _branchFor(projectId: string): Promise<string> {
+    const root = this.ingestionQueue?.registeredRoots().find(([id]) => id === projectId)?.[1];
+    // A project with no watcher (registered before ingestion existed, or via a
+    // bare POST /projects) has no root to read HEAD from, so it has no branch.
+    return root ? resolveBranch(root) : DEFAULT_BRANCH;
+  }
+
   /** Register a project directory for file watching. */
   registerProject(projectId: string, dirPath: string): void {
     if (!this.ingestionQueue) {
@@ -373,6 +394,30 @@ export class Daemon {
   private async _onFileProcessed(result: ProcessResult): Promise<void> {
     if (!this.db || !this.embedder) return;
 
+    // One write chain per path. Two ingests of the same file are routinely in
+    // flight together — a watcher event landing while a drain has already
+    // dispatched that path — and each does read-then-write: both query
+    // file_mapping, both see nothing, both insert, and branch_mapping ends up
+    // with duplicate (projectId, branch, uri) rows even though
+    // upsertBranchMapping merges on exactly that key. LanceDB merge has no
+    // unique constraint to fall back on, so the ordering has to be enforced here.
+    const path = result.filePath;
+    const apply = () => this._applyFileResult(result);
+    const prev = this._pathWrites.get(path) ?? Promise.resolve();
+    const mine = prev.then(apply, apply); // a failed predecessor must not block the path
+    this._pathWrites.set(path, mine);
+    try {
+      await mine;
+    } finally {
+      if (this._pathWrites.get(path) === mine) this._pathWrites.delete(path);
+    }
+  }
+
+  private _pathWrites = new Map<string, Promise<void>>();
+
+  private async _applyFileResult(result: ProcessResult): Promise<void> {
+    if (!this.db || !this.embedder) return;
+
     if (result.error) {
       // The file stays un-indexed and is reported by /sync; the pool is
       // unaffected (issue:worker-pool-double-respawn.md owns crash handling).
@@ -405,14 +450,25 @@ export class Daemon {
     const escaped = filePath.replace(/'/g, "''");
     const existing = await fmTable.query()
       .filter(`uri = '${escaped}'`)
-      .limit(1)
-      .toArray() as Array<{ fileVersionId: string }>;
+      .limit(100)
+      .toArray() as Array<{ fileVersionId: string; projectId: string }>;
 
     if (existing.length === 0) return;
-    const fileVersionId = existing[0].fileVersionId;
 
-    await this.db.table("chunk_mapping").delete(`fileVersionId = '${fileVersionId}'`);
-    await fmTable.delete(`fileVersionId = '${fileVersionId}'`);
+    // The watcher reports an unlink for the tree it watches, which is one branch.
+    // Drop that branch's pointer and let the version go only if nothing else
+    // holds it — a file deleted on a feature branch is still indexed on main.
+    const projectId = String(existing[0].projectId ?? "");
+    const branch = await this._branchFor(projectId);
+    await this.db
+      .table("branch_mapping")
+      .delete(
+        `projectId = '${projectId.replace(/'/g, "''")}' AND branch = '${branch.replace(/'/g, "''")}' AND uri = '${escaped}'`,
+      );
+
+    for (const row of existing as Array<{ fileVersionId: string }>) {
+      await this._retireVersionIfUnreferenced(String(row.fileVersionId));
+    }
     // No pool delete here. The hash may be referenced by any other file,
     // project or branch, and reclamation is the explicit --gc-chunks sweep's
     // job (ADR-017, issue:unlink-prune-deletes-shared-pool-rows).
@@ -436,12 +492,18 @@ export class Daemon {
       .toArray()) as Array<Record<string, unknown>>;
     const current = existing[0];
 
+    const branch = await this._branchFor(result.projectId);
+
     if (current && current.contentHash === contentHash) {
       // Refresh the lease only; the index is already correct.
       await fmTable.update({
         values: { validUntil: this.cooldownExpiry() },
         where: `fileVersionId = '${current.fileVersionId as string}'`,
       });
+      // But the *pointer* may not be: after `git checkout` the same content is now
+      // the current version on a different branch, and moving that row is the whole
+      // cost of the switch — zero re-parsing, zero vector computation.
+      await this._pointBranch(result.projectId, branch, uri, current.fileVersionId as string);
       return;
     }
 
@@ -492,18 +554,57 @@ export class Daemon {
       language: result.language,
     }]);
 
-    // The path moved to new content: drop the superseded version's mapping rows
-    // so a file is not returned twice. Pool rows are left for --gc-chunks since
-    // they are shared by content address (issue:unlink-prune-deletes-shared-pool-rows).
-    if (current && current.fileVersionId !== fileVersionId) {
-      const oldId = String(current.fileVersionId);
-      await this.db.table("chunk_mapping").delete(`fileVersionId = '${oldId}'`);
-      await fmTable.delete(`fileVersionId = '${oldId}'`);
-    }
-
     await upsertChunkMapping(this.db.table("chunk_mapping"), cmRows);
     await upsertChunksPool(this.db.table("chunks_pool"), cpRows);
     await upsertVectorPool(this.db.table("vector_pool"), vpRows);
+
+    // This branch's pointer now names the new version.
+    await this._pointBranch(result.projectId, branch, uri, fileVersionId);
+
+    // The path moved to new content on *this* branch. Other branches keep pointing
+    // at their historical version, so the old row is retired only once no pointer
+    // references it (git-branch-awareness: "Other branches continue pointing to
+    // their respective historical fileVersionId"). Pool rows are never touched
+    // here — they are shared by content address (issue:unlink-prune-deletes-shared-pool-rows).
+    if (current && current.fileVersionId !== fileVersionId) {
+      await this._retireVersionIfUnreferenced(String(current.fileVersionId));
+    }
+  }
+
+  /** Point (projectId, branch, uri) at a file version. */
+  private async _pointBranch(
+    projectId: string,
+    branch: string,
+    uri: string,
+    fileVersionId: string,
+  ): Promise<void> {
+    if (!this.db) return;
+    await upsertBranchMapping(this.db.table("branch_mapping"), [{
+      branch,
+      projectId,
+      uri,
+      fileVersionId,
+      updatedAt: new Date(),
+    }]);
+  }
+
+  /**
+   * Delete a file version's pointer rows, but only when no branch points at it any
+   * more. Deleting eagerly is what made a checkout destroy another branch's index.
+   */
+  private async _retireVersionIfUnreferenced(fileVersionId: string): Promise<void> {
+    if (!this.db) return;
+    const esc = fileVersionId.replace(/'/g, "''");
+    const holders = await this.db
+      .table("branch_mapping")
+      .query()
+      .filter(`fileVersionId = '${esc}'`)
+      .limit(1)
+      .toArray();
+    if (holders.length > 0) return;
+
+    await this.db.table("chunk_mapping").delete(`fileVersionId = '${esc}'`);
+    await this.db.table("file_mapping").delete(`fileVersionId = '${esc}'`);
   }
 
   /** Cooldown lease written to file_mapping.validUntil (ADR-023). */
@@ -678,9 +779,22 @@ export class Daemon {
     const limit = (queryOpts.limit as number) ?? 10;
     const projectId = queryOpts.projectId as string | undefined;
     const mode = (queryOpts.mode as SearchMode) ?? "hybrid";
+    // The caller resolves the branch (the CLI from .git/HEAD, an MCP client from its
+    // own context): the daemon has no working directory of its own to answer for.
+    // Omitted means "every branch", NOT `$default` — see task:search-project-scoping.
+    const branch = queryOpts.branch as string | undefined;
 
     if (!queryText) {
       this.sendError(res, 400, "INVALID_REQUEST", "'query' field is required");
+      return;
+    }
+
+    // A branch identifies a version of *one* repository, so it scopes nothing on
+    // its own. Accepting it silently would answer "all branches" to a caller that
+    // asked for one.
+    if (branch && !projectId) {
+      this.sendError(res, 400, "INVALID_REQUEST", "'branch' requires 'projectId'",
+        "A branch names a version of one project's files; send the projectId it belongs to.");
       return;
     }
 
@@ -711,7 +825,7 @@ export class Daemon {
         queryText,
         limit,
         50,
-        { projectId, mode },
+        { projectId, mode, branch, branchMapping: this.db.table("branch_mapping") },
       );
 
       res.writeHead(200, { "Content-Type": "application/json" });
@@ -780,6 +894,11 @@ export class Daemon {
       this.sendError(res, 400, "INVALID_REQUEST", `directory '${dirPath}' does not exist`);
       return;
     }
+
+    // Store a canonical file URL: callers send either a bare path or a file:// URI,
+    // and every reader (branch resolution, inferProjectId, `prag projects`) would
+    // otherwise have to accept both. /projects/watch already stores it this way.
+    rootUri = pathToFileURL(dirPath).href;
 
     // Upsert project in DB
     if (this.db) {
@@ -888,7 +1007,9 @@ export class Daemon {
     this.invalidateGrantCache();
 
     const projectId = opts.projectId ?? dirPath;
-    const isGit = statSync(join(dirPath, ".git"), { throwIfNoEntry: false })?.isDirectory() ?? false;
+    // isGitWorkspace, not a statSync().isDirectory() check: a linked worktree's
+    // `.git` is a file, and every worktree was being recorded as non-git.
+    const isGit = isGitWorkspace(dirPath);
     await upsertProjects(this.db.table("projects"), [{
       projectId,
       rootUri: pathToFileURL(dirPath).href,
@@ -1179,32 +1300,98 @@ export class Daemon {
         }
       }
 
-      // 2. Remove orphaned branch_mapping entries (no files reference them)
-      const branches = await this.db.table("branch_mapping").query().limit(10000).toArray() as Array<{ projectId: string; branch: string }>;
-      let prunedBranches = 0;
-      for (const branch of branches) {
-        const refs = await this.db.table("file_mapping")
-          .query()
-          .where(`projectId = '${branch.projectId.replace(/'/g, "''")}'`)
-          .limit(1)
-          .toArray();
-        if (refs.length === 0) {
-          await this.db.table("branch_mapping").delete(
-            `projectId = '${branch.projectId.replace(/'/g, "''")}' AND branch = '${branch.branch.replace(/'/g, "''")}'`,
-          );
-          prunedBranches++;
-        }
-      }
+      // 2. Drop pointers for branches that no longer exist in git, then the file
+      //    versions nothing points at any more. Both are default prune work
+      //    (ADR-017); only the pool sweep is opt-in.
+      const prunedBranches = await this._pruneBranchPointers();
+      const prunedVersions = await this._pruneUnreferencedVersions();
 
       if (gcChunks) purgedChunks += await this.gcUnreferencedChunks();
 
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ prunedFiles, purgedChunks, prunedBranches, gcChunks }));
+      res.end(JSON.stringify({ prunedFiles, purgedChunks, prunedBranches, prunedVersions, gcChunks }));
     } catch (err) {
       this.sendInternal(res, "INTERNAL", "prune failed", err);
     } finally {
       if (gcChunks && this.ingestionQueue) this.ingestionQueue.resume();
     }
+  }
+
+  /**
+   * Delete `branch_mapping` rows for branches git no longer has, which is what
+   * `git branch -d` leaves behind. `$default` is never a git branch, so it is left
+   * alone; a non-git project lists no branches and therefore loses nothing.
+   * Returns the number of branch pointers removed.
+   */
+  private async _pruneBranchPointers(): Promise<number> {
+    if (!this.db) return 0;
+    const rows = (await this.db
+      .table("branch_mapping")
+      .query()
+      .limit(10000)
+      .toArray()) as Array<{ projectId: string; branch: string }>;
+
+    // null = watched project whose root is unknown: branch list unknowable.
+    const alive = new Map<string, Set<string> | null>();
+    let removed = 0;
+    for (const row of rows) {
+      if (row.branch === DEFAULT_BRANCH) continue;
+      let branches: Set<string> | null | undefined = alive.get(row.projectId);
+      if (branches === undefined) {
+        const root = this.ingestionQueue
+          ?.registeredRoots()
+          .find(([id]) => id === row.projectId)?.[1];
+        // An unwatched project's branch list is unknowable here; dropping its
+        // pointers would delete the index on a prune, so keep them.
+        branches = root ? new Set(listGitBranches(root)) : null;
+        alive.set(row.projectId, branches);
+      }
+      if (branches && !branches.has(row.branch)) {
+        await this.db.table("branch_mapping").delete(
+          `projectId = '${row.projectId.replace(/'/g, "''")}' AND branch = '${row.branch.replace(/'/g, "''")}'`,
+        );
+        removed++;
+      }
+    }
+    return removed;
+  }
+
+  /**
+   * Purge `file_mapping` + `chunk_mapping` rows no branch pointer references — the
+   * default orphan cleanup (ADR-017). Pool rows survive: they are shared by content
+   * address and only `--gc-chunks` reclaims them.
+   */
+  private async _pruneUnreferencedVersions(): Promise<number> {
+    if (!this.db) return 0;
+    const pointers = (await this.db
+      .table("branch_mapping")
+      .query()
+      .limit(100000)
+      .toArray()) as Array<{ fileVersionId: string; projectId: string }>;
+    const referenced = new Set(pointers.map((p) => String(p.fileVersionId)));
+    // Tracked per *project*, not globally: a project indexed before branch
+    // tracking existed has no pointers, and a second project that does have them
+    // must not make the first one's files look orphaned (the same upgrade rule
+    // hybridSearch applies).
+    const trackedProjects = new Set(pointers.map((p) => String(p.projectId)));
+    if (trackedProjects.size === 0) return 0;
+
+    const files = (await this.db
+      .table("file_mapping")
+      .query()
+      .limit(100000)
+      .toArray()) as Array<{ fileVersionId: string; projectId: string }>;
+
+    let removed = 0;
+    for (const file of files) {
+      if (!trackedProjects.has(String(file.projectId))) continue;
+      if (referenced.has(String(file.fileVersionId))) continue;
+      const esc = String(file.fileVersionId).replace(/'/g, "''");
+      await this.db.table("chunk_mapping").delete(`fileVersionId = '${esc}'`);
+      await this.db.table("file_mapping").delete(`fileVersionId = '${esc}'`);
+      removed++;
+    }
+    return removed;
   }
 
   /**

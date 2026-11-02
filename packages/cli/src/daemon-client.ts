@@ -18,6 +18,11 @@ const HEALTH_POLL_MS = 100;
 export interface SearchOptions {
   query: string;
   projectId?: string;
+  /**
+   * File versions of one branch (plus '$default'). Only valid with projectId —
+   * a branch identifies a version of one repository. Omitted = every branch.
+   */
+  branch?: string;
   limit?: number;
   mode?: "hybrid" | "vector" | "fts";
 }
@@ -348,6 +353,7 @@ export class DaemonClient {
     const { status, body } = await this._request("POST", "/search", {
       query: opts.query,
       projectId: opts.projectId,
+      branch: opts.branch,
       limit: opts.limit ?? 5,
       mode: opts.mode ?? "hybrid",
     });
