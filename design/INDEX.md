@@ -109,7 +109,6 @@ _(no results)_
 - [Implement discovery filters, skip reporting and watch admission control](tasks/ingestion-limits-and-admission.md)
 - [Implement the ingestion worker pool with main-thread embedding and writes](tasks/ingestion-worker-pool.md)
 - [Implement grants and projects tables with allow/deny evaluation and Chokidar filter integration](tasks/project-registry-and-exclusions.md)
-- [Implement PRAG_ROOT isolation and assertable resolved paths](tasks/test-environment-isolation.md)
 - [Maintain the test fixture corpus and git fixture builder](tasks/test-fixture-corpus.md)
 - [Implement test harness setup/teardown with ephemeral port and no-spawn mode](tasks/test-harness-lifecycle.md)
 - [Spike native addon support under Bun (LanceDB, ONNX, Tree-sitter)](tasks/toolchain-spike-native-addons.md)

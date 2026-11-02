@@ -2,7 +2,7 @@
 class: task
 id: test-environment-isolation.md
 title: Implement PRAG_ROOT isolation and assertable resolved paths
-status: in_progress
+status: done
 priority: high
 relates-to:
   - feature:test-harness-and-fixtures.md
@@ -12,9 +12,11 @@ blocks:
   - task:deterministic-embedding-provider.md
 addressed-by:
   - src:core/src/paths.ts#resolvePragPaths
+  - src:core/src/paths.ts#ensurePragDirs
   - src:core/src/paths.ts#PragPaths
   - src:core/src/paths.ts#PragConfig
   - src:core/src/paths.ts#loadPragConfig
+  - src:daemon/src/main.ts#writeRuntimeFiles
 tested-by:
   - coretest:paths.test.ts#resolvePragPathsSuite
   - daemontest:daemon-isolation.test.ts#daemonPRAGROOTIsolationSuite
@@ -39,25 +41,28 @@ This blocks every other test task. Until it exists, any test that reaches `prag 
 
 ## Implementation status
 
-Reverted from `done`: path resolution is complete and tested, directory creation and
-the destructive-verification cycle are not.
+Complete. Every requirement has production wiring and a test that observes it.
 
-- **Create directories on demand — MISSING.** `grep -rn "mkdir" packages/*/src/` → 0
-  matches. The daemon never writes `daemon.token` either (`grep -rn "writeFileSync"|"daemon.token"
-  packages/daemon/src/` → 0 matches), so the `0600` requirement is unenforced: the only
-  `0600` write in the repo is `prag daemon token` (`packages/cli/src/main.ts:136-138`),
-  which throws if `runDir` does not already exist.
-- **Verification under-tested.** The no-XDG test (`packages/daemon/test/daemon-isolation.test.ts:66-97`)
-  snapshots 2 of 3 XDG roots and issues a single `GET /projects` — no index-and-search
-  cycle, so the requirement's own wording ("during a full index-and-search cycle") is
-  not exercised. The `PRAG_ROOT`+`PRAG_DATA_DIR` precedence case is checked at
-  path-resolution level only (`packages/core/test/paths.test.ts:63-71`), never by
-  observing where data lands.
+- **Directories created on demand.** `ensurePragDirs()` (`packages/core/src/paths.ts:140`)
+  mkdir -p's all four. `resolvePragPaths()` stays pure on purpose — a test that only
+  resolves paths must not touch the filesystem — so the two entry points that are about
+  to *use* them call it: `loadConfig()` before reading config.json
+  (`packages/daemon/src/main.ts:53`) and `prag daemon rotate-secret`.
+  Without this the documented `~/.config/prag/config.json` was silently ignored on a
+  fresh machine, because nothing else ever created `configDir` (LanceDB makes only its
+  own data directory, `writeRuntimeFiles` only `runDir`).
+- **`daemon.token` 0600.** Written at startup by `writeRuntimeFiles()`
+  (`packages/daemon/src/main.ts:197-204`), only when the token is the default `guest`;
+  `chmodSync` follows the `writeFileSync` mode because mode is ignored for a file that
+  already exists. Asserted as `statSync().mode & 0o777 === 0o600`, and that an explicit
+  `PRAG_API_KEY` leaves no token file on disk.
+- **Verification cycle.** `packages/daemon/test/daemon-isolation.test.ts` drives
+  `loadConfig()`/`bootstrap()`/`writeRuntimeFiles()` rather than re-deriving
+  `resolvePragPaths()` and asserting the string equals itself: a real register + sync +
+  search cycle runs with all three XDG roots pointed at a scratch directory, which is
+  then asserted *entirely* empty, and `PRAG_DATA_DIR` precedence is checked by where
+  `lancedb/` actually lands. Deleting the root after a cycle removes the instance.
 
-Satisfied: `PRAG_ROOT` derivation (`packages/core/src/paths.ts:62-69`), precedence with
-no XDG fallback (`paths.ts:71-78`, tested `paths.test.ts:63-107`), the four `/health`
-path fields (`packages/daemon/src/daemon.ts:333-336`, asserted
-`daemon-isolation.test.ts:50-56`), and the `env-and-storage-paths.md` update.
 
 Remaining: `mkdir -p` the derived dirs at path-resolution time with `daemon.token` at
 `0600`; extend the isolation test to a real index+search cycle over all three XDG roots.
