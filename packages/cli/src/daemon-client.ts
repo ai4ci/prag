@@ -2,7 +2,7 @@
 import { spawn } from "node:child_process";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { resolvePragPaths } from "@prag/core";
+import { resolvePragPaths, type SearchResult } from "@prag/core";
 
 const DEFAULT_PORT = 7724;
 const API_VERSION = 1;
@@ -16,18 +16,15 @@ export interface SearchOptions {
   mode?: "hybrid" | "vector" | "fts";
 }
 
-export interface SearchHit {
-  filePath: string;
-  projectId: string;
-  score: number;
-  totalChunks: number;
-  branch: string;
-}
-
-export interface SearchResult {
-  hits: SearchHit[];
-  totalChunks: number;
-}
+// The daemon's search shape is defined once, in @prag/core; the client re-uses
+// it rather than keeping a second copy that can drift (it had: `filePath` for a
+// field the daemon sends as `uri`, so every hit printed as "File: undefined").
+export type {
+  SearchResult,
+  SearchFileHit,
+  SearchChunkHit,
+  SearchMode,
+} from "@prag/core";
 
 export interface HealthResponse {
   status: string;
@@ -57,13 +54,18 @@ export interface GrantInfo {
 
 export interface SyncResult {
   ok: boolean;
+  /** 202: work was still running when the drain deadline passed. */
   flushedFiles?: number;
   pendingFiles?: number;
+  failedFiles?: string[];
+  hadNewFailures?: boolean;
 }
 
 export interface PruneResult {
-  prunedBranches: number;
+  prunedFiles: number;
   purgedChunks: number;
+  prunedBranches: number;
+  gcChunks: boolean;
 }
 
 export interface ReembedResult {

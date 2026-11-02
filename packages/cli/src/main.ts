@@ -204,9 +204,11 @@ export async function main(): Promise<void> {
     }
 
     for (let i = 0; i < result.hits.length; i++) {
-      const hit = result.hits[i];
+      const hit = result.hits[i]!;
       console.log(`[Hit ${i + 1}] (score: ${hit.score.toFixed(4)}) ${hit.projectId}`);
-      console.log(`File: ${hit.filePath}`);
+      console.log(`File: ${hit.uri}`);
+      const best = hit.chunks[0];
+      if (best?.scopeContext) console.log(`Scope: ${best.scopeContext}`);
       console.log("-".repeat(80));
     }
     console.log(`\n${result.totalChunks} total chunks indexed`);
@@ -306,7 +308,10 @@ export async function main(): Promise<void> {
   if (cmd === "prune") {
     const gcChunks = rest.includes("--gc-chunks");
     const result = await daemonClient.prune(gcChunks);
-    console.log(`Pruned ${result.prunedBranches} branches, purged ${result.purgedChunks} chunks`);
+    console.log(
+      `Pruned ${result.prunedFiles} files, ${result.prunedBranches} branches` +
+        (result.gcChunks ? `, reclaimed ${result.purgedChunks} chunks` : ""),
+    );
     return;
   }
 
