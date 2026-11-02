@@ -151,6 +151,17 @@ async function readBody(res: Response): Promise<string> {
   return await res.text();
 }
 
+export interface WatchResult {
+  projectId: string;
+  rootUri: string;
+  status: string;
+  discovered: {
+    projects: number;
+    files: number;
+    skipped: Record<string, number>;
+  };
+}
+
 enum ExitCode {
   SUCCESS = 0,
   FAILURE = 1,
@@ -339,9 +350,18 @@ export class DaemonClient {
     return JSON.parse(body) as GrantInfo[];
   }
 
-  async addGrant(pattern: string, action: "allow" | "deny", reason?: string): Promise<void> {
+  async addGrant(
+    pattern: string,
+    action: "allow" | "deny",
+    reason?: string,
+  ): Promise<{ pattern: string; action: string; purgedFiles?: number; unwatched?: string | null }> {
     const { status, body } = await this._request("POST", "/grants", { pattern, action, reason });
     if (status !== 200) throw parseError(status, body);
+    try {
+      return JSON.parse(body);
+    } catch {
+      return { pattern, action };
+    }
   }
 
   async removeGrant(pattern: string): Promise<void> {
@@ -366,6 +386,25 @@ export class DaemonClient {
   async registerProject(projectId: string, rootUri: string): Promise<void> {
     const { status, body } = await this._request("POST", "/projects", { projectId, rootUri });
     if (status !== 200) throw parseError(status, body);
+  }
+
+  /**
+   * Grant-gated registration with a discovery dry run (ADR-009, ADR-023).
+   * Throws WATCH_LIMIT_EXCEEDED when the tree is bigger than
+   * `ingestion.watchConfirmThreshold` and `confirm` is false.
+   */
+  async watchUri(
+    uri: string,
+    projectId?: string,
+    confirm = false,
+  ): Promise<WatchResult> {
+    const { status, body } = await this._request("POST", "/projects/watch", {
+      uri,
+      ...(projectId ? { projectId } : {}),
+      ...(confirm ? { confirm: true } : {}),
+    });
+    if (status !== 200) throw parseError(status, body);
+    return JSON.parse(body) as WatchResult;
   }
 
   // ── Sync ─────────────────────────────────────────────────

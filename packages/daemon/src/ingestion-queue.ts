@@ -2,12 +2,14 @@
 //
 // Watches registered project directories, debounces file change events
 // via cooldown leases (validUntil in file_mapping), applies ADR-023
-// discovery filters before enqueuing, and dispatches to the WorkerPool.
+// discovery filters and the ADR-009 grant policy before enqueuing, and
+// dispatches to the WorkerPool.
 
 import chokidar from "chokidar";
 import type { FSWatcher } from "chokidar";
 import { open, readdir, stat, type FileHandle } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { isBuiltinIgnored, isDenied, DEFAULT_MAX_FILE_BYTES, type GrantRow } from "@prag/core";
 import { WorkerPool } from "./worker-pool.js";
 import { type ProcessResult } from "./worker-pool.js";
 
@@ -15,6 +17,7 @@ import { type ProcessResult } from "./worker-pool.js";
 
 const BINARY_DETECTION_BYTES = 8192;
 export const DEFAULT_COOLDOWN_MS = 60_000;
+const GRANTS_CACHE_MS = 1_000;
 
 // ── Types ─────────────────────────────────────────────────────────────
 
@@ -28,6 +31,14 @@ export interface IngestionConfig {
   cooldownMs?: number;
   maxFileBytes?: number;
   poolSize?: number;
+  /**
+   * Live view of the grants table, consulted at admission (ADR-009). A function
+   * rather than an array so a deny takes effect on the next event, not on the
+   * next restart.
+   */
+  grants?: () => GrantRow[] | Promise<GrantRow[]>;
+  /** Projects whose status is not 'active' (ADR-023 pause). */
+  isPaused?: (projectId: string) => boolean | Promise<boolean>;
 }
 
 export interface ProjectIngestionState {
@@ -70,7 +81,11 @@ export class IngestionQueue {
     filePath: string;
   }> = [];
   private pool: WorkerPool;
-  private config: Required<IngestionConfig>;
+  private config: IngestionConfig & {
+    cooldownMs: number;
+    maxFileBytes: number;
+    poolSize: number;
+  };
   /**
    * Awaited by the caller, so a drain barrier is possible: returning the write's
    * promise is what lets /sync report "indexed" rather than "queued".
@@ -86,8 +101,10 @@ export class IngestionQueue {
     this.onFileReady = onFileReady;
     this.config = {
       cooldownMs: config.cooldownMs ?? DEFAULT_COOLDOWN_MS,
-      maxFileBytes: config.maxFileBytes ?? 2 * 1024 * 1024,
+      maxFileBytes: config.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES,
       poolSize: config.poolSize ?? 1,
+      grants: config.grants,
+      isPaused: config.isPaused,
     };
   }
 
@@ -235,30 +252,44 @@ export class IngestionQueue {
   // ── Internal ──────────────────────────────────────────────────────
 
   private _shouldIgnore(filePath: string): boolean {
-    // Skip hidden files and common patterns
-    const basename = filePath.split("/").pop() ?? "";
-    if (basename.startsWith(".") && basename !== ".gitignore") return true;
-    if (basename === "node_modules") return true;
-    if (basename === "package-lock.json") return true;
-    return false;
+    // Same predicate the discovery dry run uses (ADR-023), so the counts a user
+    // confirms before `watch` match what the watcher then indexes.
+    return isBuiltinIgnored(filePath);
   }
 
+  /**
+   * Single admission gate (ADR-009 §1 + ADR-023): a URI reaches the worker pool
+   * only if it is not ignored, not denied by a grant, under the size/binary
+   * limits, and belongs to a project that is not paused. Both the cooldown timer
+   * and flushAll() route through here, so a deny cannot be raced by a queued
+   * event.
+   */
   private async _checkFile(
     filePath: string,
     projectId: string,
   ): Promise<boolean> {
+    if (await this.config.isPaused?.(projectId)) return false;
+
+    // Grants are consulted before the file is opened: `prag deny` on a secret
+    // means prag never reads it, not merely that it discards the result.
+    const grants = await this._currentGrants();
+    if (grants && isDenied(filePath, grants)) {
+      this._incrementSkip(projectId, "denied");
+      return false;
+    }
+
     let fd: FileHandle | undefined;
     try {
       fd = await open(filePath, "r");
-      const stat = await fd.stat();
+      const info = await fd.stat();
 
       // maxFileBytes check
-      if (stat.size > this.config.maxFileBytes) {
+      if (info.size > this.config.maxFileBytes) {
         this._incrementSkip(projectId, "tooLarge");
         return false;
       }
 
-      if (stat.size === 0) {
+      if (info.size === 0) {
         this._incrementSkip(projectId, "empty");
         return false;
       }
@@ -273,11 +304,69 @@ export class IngestionQueue {
 
       return true;
     } catch {
-      this._incrementSkip(projectId, "denied");
+      this._incrementSkip(projectId, "unreadable");
       return false;
     } finally {
       await fd?.close();
     }
+  }
+
+  /**
+   * Grants, cached briefly. A DB round trip per file would make the scan
+   * grant-bound; `invalidateGrants()` covers the case that matters (a deny the
+   * daemon just accepted) and the TTL covers writes from another process.
+   *
+   * shortcut: 1s staleness window for out-of-band grant changes; drop the TTL if
+   * grants ever move behind a change notification.
+   */
+  private _grantsCache: { at: number; rows: GrantRow[] } | null = null;
+
+  private async _currentGrants(): Promise<GrantRow[] | null> {
+    const load = this.config.grants;
+    if (!load) return null;
+    const now = Date.now();
+    if (this._grantsCache && now - this._grantsCache.at < GRANTS_CACHE_MS) {
+      return this._grantsCache.rows;
+    }
+    try {
+      const rows = await load();
+      this._grantsCache = { at: now, rows };
+      return rows;
+    } catch (err) {
+      // Fail closed: an unreadable policy is not permission to index.
+      console.error("[prag] grant lookup failed, refusing to ingest:", err);
+      return null;
+    }
+  }
+
+  /** Call after any grant mutation so the next event sees it (ADR-009 §4). */
+  invalidateGrants(): void {
+    this._grantsCache = null;
+  }
+
+  /** True when the project is registered but paused (ADR-023). */
+  isRegistered(projectId: string): boolean {
+    return this.watchers.has(projectId);
+  }
+
+  /** Registered roots, so a deny can un-watch the project that contains it. */
+  registeredRoots(): Array<[string, string]> {
+    return [...this.projectDirs.entries()];
+  }
+
+  /**
+   * Force the next drain to walk the whole tree again. Used on resume: files
+   * written while paused were dropped by admission, and the incremental walk is
+   * mtime-based, so it would otherwise consider them already seen and never
+   * revisit them. Re-walking is cheap and idempotent — an unchanged file
+   * short-circuits on its content hash in `_ingestFile`.
+   */
+  rescan(projectId?: string): void {
+    if (projectId) {
+      if (this.projectDirs.has(projectId)) this.reconciledAt.set(projectId, 0);
+      return;
+    }
+    for (const id of this.projectDirs.keys()) this.reconciledAt.set(id, 0);
   }
 
   private _incrementSkip(projectId: string, reason: string): void {

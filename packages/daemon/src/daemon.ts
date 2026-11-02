@@ -7,15 +7,22 @@
 import {
   createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { statSync } from "node:fs";
+import { basename, join } from "node:path";
+import { pathToFileURL, fileURLToPath } from "node:url";
 
 import {
   type LanceDbSchema,
   type EmbeddingProvider,
   type SearchResult,
   type SearchMode,
+  type GrantRow,
   resolvePragPaths,
   type PragPaths,
   hybridSearch,
+  discoveryDryRun,
+  pathToGrantPattern,
+  grantPatternToPath,
+  DEFAULT_WATCH_CONFIRM_THRESHOLD,
   upsertGrants,
   upsertProjects,
   upsertFileMapping,
@@ -42,6 +49,9 @@ export { DEFAULT_PORT };
 export { API_VERSION };
 
 export const DAEMON_VERSION = "0.1.0";
+
+/** How long a cached grants/status read may be reused during a scan. */
+const STATUS_CACHE_MS = 1_000;
 
 /** Endpoints still served while the index has a model mismatch (ADR-015). */
 export const MISMATCH_ALLOWED = new Set(["/health", "/reembed", "/shutdown"]);
@@ -81,6 +91,8 @@ export interface DaemonConfig {
     poolSize?: number;
     /** ADR-019 bound on POST /sync; default DEFAULT_SYNC_TIMEOUT_MS. */
     syncTimeoutMs?: number;
+    /** ADR-023 admission threshold for `prag watch` on a container directory. */
+    watchConfirmThreshold?: { projects: number; files: number };
   };
   /** Model id the daemon embeds with (resolved by bootstrap). */
   embeddingModel?: string;
@@ -162,6 +174,11 @@ export class Daemon {
         {
           cooldownMs: ingConfig.cooldownMs,
           maxFileBytes: ingConfig.maxFileBytes,
+          // ADR-009 §1: policy is consulted at admission, on every event, so a
+          // `prag deny` stops a file from being read without a restart.
+          grants: () => this._grantRows(),
+          // ADR-023: a paused project stops scanning; nothing else changes.
+          isPaused: (projectId) => this._projectPaused(projectId),
         },
       );
     }
@@ -246,6 +263,87 @@ export class Daemon {
       throw new Error("Ingestion not enabled (set ingestion.poolSize > 0)");
     }
     this.ingestionQueue.registerProject(projectId, dirPath);
+  }
+
+  /**
+   * Drop the ingestion queue's cached grants so a policy change applies to the
+   * next event rather than after a restart (ADR-009 §4).
+   */
+  invalidateGrantCache(): void {
+    this.ingestionQueue?.invalidateGrants();
+  }
+
+  /**
+   * Excluded paths under a root, so `prag deny` can report what it unpicks
+   * instead of silently dropping rows. Deliberately not a deletion: pool rows are
+   * content-addressed and shared, and `--gc-chunks` owns reclaiming them.
+   */
+  /**
+   * Exclude paths from search by removing their `file_mapping`/`chunk_mapping`
+   * rows. Pool rows are content-addressed and shared, so they are left alone —
+   * `--gc-chunks` owns reclamation (issue:unlink-prune-deletes-shared-pool-rows).
+   */
+  async purgeDenied(pattern: string): Promise<string[]> {
+    const denied = await this._matchingFilePaths(pattern);
+    for (const filePath of denied) await this._handleUnlink(filePath);
+    return denied;
+  }
+
+  private async _grantRows(): Promise<GrantRow[]> {
+    if (!this.db) return [];
+    return (await this.db.table("grants").query().toArray()) as unknown as GrantRow[];
+  }
+
+  private async _projectPaused(projectId: string): Promise<boolean> {
+    return (await this._pausedProjects()).has(projectId);
+  }
+
+  /**
+   * Set of paused project ids, cached briefly for the same reason grants are:
+   * admission runs per file, and a DB round trip per file would make a scan
+   * status-bound. `pause`/`resume` invalidate it, so the CLI's own pause takes
+   * effect on the very next event.
+   *
+   * shortcut: 1s staleness for a pause issued by another process.
+   */
+  private _pausedCache: { at: number; ids: Set<string> } | null = null;
+
+  private async _pausedProjects(): Promise<Set<string>> {
+    if (!this.db) return new Set();
+    const now = Date.now();
+    if (this._pausedCache && now - this._pausedCache.at < STATUS_CACHE_MS) {
+      return this._pausedCache.ids;
+    }
+    const rows = (await this.db
+      .table("projects")
+      .query()
+      .filter("status = 'paused'")
+      .limit(1000)
+      .toArray()) as Array<{ projectId: string }>;
+    const ids = new Set(rows.map((r) => String(r.projectId)));
+    this._pausedCache = { at: now, ids };
+    return ids;
+  }
+
+  /** Indexed file paths (from `file_mapping`) covered by a grant pattern. */
+  private async _matchingFilePaths(pattern: string): Promise<string[]> {
+    if (!this.db) return [];
+    const rows = (await this.db
+      .table("file_mapping")
+      .query()
+      .toArray()) as unknown as Array<{ uri: string }>;
+    const denyGrants: GrantRow[] = [
+      { pattern, action: "deny", reason: "user_deny", createdAt: new Date() },
+    ];
+    return rows
+      .map((r) => String(r.uri))
+      .filter((p) => {
+        try {
+          return evaluateUriGrants(pathToFileURL(p).href, denyGrants).action === "deny";
+        } catch {
+          return false;
+        }
+      });
   }
 
   private async _onFileProcessed(result: ProcessResult): Promise<void> {
@@ -452,6 +550,7 @@ export class Daemon {
     if (req.method === "POST") {
       if (url.pathname === "/search") return this._handleSearch(req, res);
       if (url.pathname === "/projects") return this._handlePostProjects(req, res);
+      if (url.pathname === "/projects/watch") return this._handleWatchUri(req, res);
       if (url.pathname === "/grants") return this._handlePostGrants(req, res);
       if (url.pathname === "/grants/evaluate") return this._handleEvaluateGrants(req, res);
       if (url.pathname === "/sync") return this._handleSync(req, res);
@@ -647,6 +746,114 @@ export class Daemon {
     res.end(JSON.stringify({ projectId, rootUri, status: "active" }));
   }
 
+  /**
+   * POST /projects/watch — the grant-gated registration path (ADR-009 §5,
+   * ADR-023): write the allow grant, dry-run discovery, and only then watch.
+   *
+   * Order matters. Past the threshold without `confirm` nothing is written at
+   * all, so a refusal leaves no half-applied policy behind.
+   */
+  private async _handleWatchUri(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (!this.db) {
+      res.writeHead(503);
+      res.end("Service not initialized\n");
+      return;
+    }
+
+    const body = await readBody(req).catch(() => null);
+    let opts: { uri?: string; projectId?: string; confirm?: boolean } = {};
+    if (body) {
+      try {
+        opts = JSON.parse(body);
+      } catch {
+        /* treated as a missing uri below */
+      }
+    }
+
+    const rootUri = opts.uri;
+    if (!rootUri) {
+      this.sendError(res, 400, "INVALID_REQUEST", "'uri' is required");
+      return;
+    }
+    if (!rootUri.startsWith("file://")) {
+      this.sendError(
+        res,
+        503,
+        "CRAWL_BACKEND_REQUIRED",
+        `no web fetch backend is configured to watch ${rootUri}`,
+        "Set web.backend in config.json or PRAG_WEB_BACKEND, or watch a file:// URI",
+      );
+      return;
+    }
+
+    const dirPath = fileURLToPath(rootUri);
+    try {
+      statSync(dirPath);
+    } catch {
+      this.sendError(res, 400, "INVALID_REQUEST", `directory '${dirPath}' does not exist`);
+      return;
+    }
+
+    const dryRun = await discoveryDryRun(dirPath, await this._grantRows(), {
+      maxFileBytes: this.config.ingestion?.maxFileBytes,
+      threshold: this.config.ingestion?.watchConfirmThreshold,
+    });
+
+    if (dryRun.exceedsThreshold && !opts.confirm) {
+      this.sendError(
+        res,
+        409,
+        "WATCH_LIMIT_EXCEEDED",
+        `watching ${dirPath} would register ${dryRun.projects} projects / ${dryRun.files} files`,
+        "Re-send with confirm: true (CLI: --yes) to proceed",
+        {
+          projects: dryRun.projects,
+          files: dryRun.files,
+          threshold: dryRun.threshold ?? DEFAULT_WATCH_CONFIRM_THRESHOLD,
+        },
+      );
+      return;
+    }
+
+    await upsertGrants(this.db.table("grants"), [{
+      pattern: pathToGrantPattern(dirPath, "allow"),
+      action: "allow",
+      reason: "watch_root",
+      createdAt: new Date(),
+    }]);
+    this.invalidateGrantCache();
+
+    const projectId = opts.projectId ?? dirPath;
+    const isGit = statSync(join(dirPath, ".git"), { throwIfNoEntry: false })?.isDirectory() ?? false;
+    await upsertProjects(this.db.table("projects"), [{
+      projectId,
+      rootUri: pathToFileURL(dirPath).href,
+      name: basename(dirPath),
+      isGit,
+      defaultCooldownSeconds: Math.round(
+        (this.config.ingestion?.cooldownMs ?? DEFAULT_COOLDOWN_MS) / 1000,
+      ),
+      status: "active",
+      registeredAt: new Date(),
+      lastSyncedAt: null,
+    }]);
+
+    try {
+      this.registerProject(projectId, dirPath);
+    } catch (err) {
+      this.sendError(res, 500, "INTERNAL", (err as Error).message);
+      return;
+    }
+
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({
+      projectId,
+      rootUri: pathToFileURL(dirPath).href,
+      status: "active",
+      discovered: { projects: dryRun.projects, files: dryRun.files, skipped: dryRun.skipped },
+    }));
+  }
+
   private async _handleSync(req: IncomingMessage, res: ServerResponse): Promise<void> {
     let projectId: string | undefined;
     const raw = await readBody(req).catch(() => null);
@@ -769,9 +976,42 @@ export class Daemon {
         createdAt: new Date(),
       }]);
     }
+    // A deny must stop the next file event, not the next restart (ADR-009 §4).
+    this.invalidateGrantCache();
+
+    let unwatched: string | null = null;
+    let purged = 0;
+    if (opts.action === "deny" && this.db) {
+      // Report what is being taken out of search rather than silently dropping
+      // rows; pool rows are shared and stay for --gc-chunks.
+      purged = (await this.purgeDenied(opts.pattern)).length;
+      unwatched = this._unwatchUnder(opts.pattern);
+    }
 
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ pattern: opts.pattern, action: opts.action }));
+    res.end(JSON.stringify({
+      pattern: opts.pattern,
+      action: opts.action,
+      purgedFiles: purged,
+      unwatched,
+    }));
+  }
+
+  /**
+   * Stop the watcher for any registered project whose root lies inside `pattern`,
+   * so a denied directory stops producing events instead of being filtered per
+   * file forever. Returns the project id, since at most one root can contain a
+   * given path.
+   */
+  private _unwatchUnder(pattern: string): string | null {
+    const dir = grantPatternToPath(pattern);
+    for (const [projectId, root] of this.ingestionQueue?.registeredRoots() ?? []) {
+      if (root === dir || root.startsWith(dir.endsWith("/") ? dir : dir + "/")) {
+        this.ingestionQueue?.unregisterProject(projectId);
+        return projectId;
+      }
+    }
+    return null;
   }
 
   private async _handleEvaluateGrants(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -1007,6 +1247,16 @@ export class Daemon {
         values: { status: newStatus },
         where: `projectId = '${escaped}'`,
       });
+    }
+    // The status is read per file through a short cache; drop it so the next
+    // event sees the change rather than the next second's (ADR-023).
+    this._pausedCache = null;
+    if (newStatus === "active") {
+      // Files written while paused were dropped at admission, and the
+      // incremental mtime walk now considers them seen: force a full re-walk.
+      // Unchanged files short-circuit on content hash, so this re-reads rather
+      // than re-embeds (ADR-023: resume must not re-index current files).
+      this.ingestionQueue?.rescan(opts.projectId);
     }
 
     res.writeHead(200, { "Content-Type": "application/json" });

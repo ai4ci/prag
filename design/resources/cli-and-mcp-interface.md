@@ -454,6 +454,8 @@ The daemon exposes an internal REST/JSON API strictly bound to `127.0.0.1:<port>
 | `POST` | `/grants` | Adds allow or deny rule | Body: `{ pattern: string, action: 'allow'|'deny', reason?: string }` |
 | `DELETE` | `/grants` | Removes an active rule | Body: `{ pattern: string }` |
 | `GET` | `/projects` | Lists registered projects | Returns: `ProjectRecord[]` |
+| `POST` | `/projects` | Registers a project the caller has already resolved | Body: `{ projectId: string, rootUri: string }` -> `{ projectId, rootUri, status }`. Applies no policy and runs no discovery; use `/projects/watch` for a URI a human or agent supplied. |
+| `POST` | `/projects/watch` | Grant-gated discovery + registration (ADR-009, ADR-023) | Body: `{ uri: string, projectId?: string, confirm?: boolean }` -> writes the `allow` grant, dry-runs discovery, registers the project. Past `ingestion.watchConfirmThreshold` without `confirm` -> `409 WATCH_LIMIT_EXCEEDED` with `{ projects, files }` in `details` and **no grant written**. Web URI -> `503 CRAWL_BACKEND_REQUIRED` (ADR-024). |
 | `POST` | `/sync` | Drain barrier: force reconciliation and flush | Body: `{ projectId?: string }` $\to$ Returns once the queue is empty and all writes are committed: `{ synced: true, flushedFiles: number, pendingFiles: number }` |
 | `POST` | `/prune` | Run branch pruning & GC | Body: `{ gcChunks?: boolean }` (default `false`) $\to$ Returns: `{ prunedBranches: number, purgedChunks: number }` |
 | `POST` | `/reembed` | Drop content tables and requeue a full rebuild under a new model | Body: `{ model?: string }` $\to$ Returns immediately: `{ requeued: number }` (projects enqueued) |

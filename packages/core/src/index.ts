@@ -31,6 +31,20 @@ export {
 } from "./database.js";
 
 export {
+  discoveryDryRun,
+  isDenied,
+  isBuiltinIgnored,
+  grantPatternToPath,
+  pathToGrantPattern,
+  DEFAULT_MAX_FILE_BYTES,
+  DEFAULT_WATCH_CONFIRM_THRESHOLD,
+  BUILTIN_IGNORED_BASENAMES,
+  type DiscoveryLimits,
+  type DryRunResult,
+  type SkipReason,
+} from "./discovery.js";
+
+export {
   hybridSearch,
   type SearchResult,
   type SearchFileHit,

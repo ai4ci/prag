@@ -245,15 +245,31 @@ export async function main(): Promise<void> {
     const uri = rest[0];
     if (!uri) { console.error("watch requires a URI"); usage(ExitCode.USAGE); }
     const normalizedUri = normalizeUri(uri);
-    await daemonClient.addGrant(`${normalizedUri}/**`, "allow");
-
-    // The grant alone indexes nothing: the daemon only watches registered
-    // projects. projectId is the normalized root URI (cli-and-mcp-interface.md),
-    // which is also what `search-local` resolves the cwd against.
+    // projectId is the normalized root URI (cli-and-mcp-interface.md), which is
+    // also what `search-local` resolves the cwd against.
     const projectId = getFlag(rest, "--project", "-p") ?? normalizedUri;
-    await daemonClient.registerProject(projectId, normalizedUri);
-    console.log(`Watching ${normalizedUri} (project ${projectId})`);
-    console.log("Run `prag sync` to index it now, or let the watcher catch changes.");
+    const confirmed = getFlag(rest, "--yes", "-y") !== undefined;
+
+    // One call: the daemon writes the allow grant, dry-runs discovery, and only
+    // then registers the watcher. A grant alone indexes nothing (ADR-009 §5).
+    try {
+      const res = await daemonClient.watchUri(normalizedUri, projectId, confirmed);
+      const d = res.discovered;
+      const skipped = Object.values(d.skipped ?? {}).reduce((a, b) => a + b, 0);
+      console.log(`Watching ${res.rootUri} (project ${res.projectId})`);
+      console.log(`Discovered ${d.projects} project(s), ${d.files} file(s)` +
+        (skipped ? `, ${skipped} skipped` : ""));
+      console.log("Run `prag sync` to index it now, or let the watcher catch changes.");
+    } catch (err) {
+      const e = err as DaemonError;
+      if (e.code === "WATCH_LIMIT_EXCEEDED") {
+        const det = (e.details ?? {}) as { projects?: number; files?: number };
+        console.error(`Would register ${det.projects} projects / ${det.files} files.`);
+        console.error("Re-run with --yes to proceed (ADR-023). Nothing was changed.");
+        process.exit(ExitCode.USAGE);
+      }
+      throw err;
+    }
     return;
   }
 
@@ -261,8 +277,12 @@ export async function main(): Promise<void> {
     const uri = rest[0];
     if (!uri) { console.error("deny requires a URI"); usage(ExitCode.USAGE); }
     const normalizedUri = normalizeUri(uri);
-    await daemonClient.addGrant(normalizedUri, "deny");
+    const res = await daemonClient.addGrant(`${normalizedUri}/**`, "deny");
     console.log(`Denied ${normalizedUri}`);
+    if (res && (res.purgedFiles || res.unwatched)) {
+      if (res.purgedFiles) console.log(`Removed ${res.purgedFiles} indexed file(s) from search`);
+      if (res.unwatched) console.log(`Un-watched project ${res.unwatched}`);
+    }
     return;
   }
 
