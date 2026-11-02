@@ -87,7 +87,7 @@ The bearer token comes from `PRAG_API_KEY`; unset, it defaults to `guest` and pr
 ### Verify your install
 
 ```bash
-npm test        # 88 core + 97 daemon + 33 cli, ~20s
+npm test        # 88 core + 103 daemon + 33 cli, ~20s
 npm run lint
 ```
 
@@ -125,13 +125,6 @@ Design requirements not yet implemented:
 - [ ] Child git repositories are counted by discovery but not registered as their own `projects`
       rows, so per-repository scoping and the `$default` sentinel are unimplemented
       (`task:project-registry-and-exclusions.md`).
-- [ ] Emit the unified error envelope from every daemon path (ADR-022); the main failure paths now
-      use it, `/prune` and `/reembed` still answer HTTP 200 with zeroed counters on error.
-- [ ] `prag reembed` pinned-model detection (ADR-015) — model mismatch detection and the
-      `.embedding-model.json` sidecar are in place, but `/reembed` is an in-place sweep rather
-      than the drop-and-requeue the ADR mandates, and `--model <name>` is accepted and ignored.
-- [ ] `WorkerPool` has no concurrency term, so ingestion is bounded by queue depth per worker --
-      a weaker cap than ADR-021 describes (`task:ingestion-limits-and-admission.md`).
 - [ ] LiteParse PDF/DOCX layout extraction; unsupported documents are refused by extension today.
 - [ ] Web ingestion: the pluggable fetch-backend interface (ADR-024) and its `plain-fetcher` /
       Firecrawl / Exa backends.
@@ -139,10 +132,6 @@ Design requirements not yet implemented:
 - [ ] Bun native-addon spike.
 - [ ] No published package or single-binary artifact — `prag` installs by `npm link` from a clone
       (`issue:no-installation-instructions.md`).
-- [ ] The MCP endpoint is missing `watch_uri`, `deny_uri`, `get_indexing_status` and `prune_index`
-      (`task:mcp-server-endpoint.md`), so an agent cannot grant or ungrant a workspace.
-- [ ] `.github/workflows/ci.yaml` exists but has never run: the branch is unpushed, so no Actions
-      run has ever executed it. Treat its assertions as unverified until the first run.
 
 ---
 

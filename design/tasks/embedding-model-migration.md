@@ -2,12 +2,22 @@
 class: task
 id: embedding-model-migration.md
 title: Implement pinned embedding model detection and prag reembed rebuild
-status: in_progress
+status: done
 priority: medium
 relates-to:
   - feature:background-worker-queue.md
+addressed-by:
+  - src:core/src/database.ts#LanceDbSchema.dropContentTables
+  - src:core/src/embedding.ts#readEmbeddingSidecar
+  - src:core/src/embedding.ts#writeEmbeddingSidecar
+  - src:daemon/src/main.ts#rebuildEmbeddingSpace
+  - src:daemon/src/main.ts#EmbeddingMismatchError
+  - src:daemon/src/daemon.ts#Daemon._handleReembed
+  - src:daemon/src/daemon.ts#RebuildResult
+  - src:cli/src/daemon-client.ts#DaemonClient.reembed
 tested-by:
-  - daemontest:daemon.test.ts#daemonSuite
+  - daemontest:reembed.test.ts#reembedSuite
+  - daemontest:error-envelope.test.ts#errorEnvelopeSuite
 ---
 ## Objective
 Implement the pinned-embedding-model detection and explicit rebuild workflow described in ADR-015.

@@ -45,6 +45,12 @@ export interface SearchResult {
    */
   byProject: Record<string, number>;
   hits: SearchFileHit[];
+  /**
+   * Size of the fused RRF candidate pool for THIS query, after the adaptive
+   * widening loop — not the size of the index. It varies with the query, the
+   * embedder and the number of widening rounds, so it is a measure of how much
+   * work the search did, never of how much content is stored.
+   */
   totalChunks: number;
 }
 

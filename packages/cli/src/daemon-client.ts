@@ -97,7 +97,11 @@ export interface PruneResult {
 }
 
 export interface ReembedResult {
+  /** Registered projects seeded for a full rescan (ADR-015 §3). */
   requeued: number;
+  /** The model the index is now pinned to -- echoed so `--model` is visibly honoured. */
+  model: string;
+  dim: number;
 }
 
 export class DaemonError extends Error {

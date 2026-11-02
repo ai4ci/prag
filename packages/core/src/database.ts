@@ -141,6 +141,19 @@ export interface TableDefinition {
   }>;
 }
 
+/**
+ * Tables derived from indexed content, in dependency order. Everything here is
+ * rebuildable from the working tree; `grants` and `projects` deliberately are
+ * not, because they encode user intent that no rescan can recover.
+ */
+export const CONTENT_TABLES = [
+  "branch_mapping",
+  "file_mapping",
+  "chunk_mapping",
+  "chunks_pool",
+  "vector_pool",
+] as const;
+
 export const ALL_TABLES: TableDefinition[] = [
   {
     name: "grants",
@@ -274,6 +287,33 @@ export class LanceDbSchema {
 
     await this._createTables();
     await this._createIndexes();
+  }
+
+  /**
+   * ADR-015: drop every content-derived table, keeping only the policy and
+   * registry tables `grants` and `projects`.
+   *
+   * This is the destructive half of a re-embed. It is deliberately *not* an
+   * in-place vector rewrite: a fixed-width vector column cannot absorb a
+   * dimension change, and vectorised-unit boundaries are tokenizer-dependent
+   * (ADR-014), so they must be recomputed from source rather than reused.
+   *
+   * Dropping before the first new vector is written is what makes an
+   * interrupted rebuild safe: the index is left partial but single-model,
+   * never a silent mix of two embedding spaces (ADR-015 §5).
+   */
+  async dropContentTables(): Promise<void> {
+    const existing = new Set(await this.db.tableNames());
+    for (const name of CONTENT_TABLES) {
+      // The handle has to go before the table does, or the cached Table in
+      // _tables keeps pointing at storage that no longer exists.
+      const handle = this._tables.get(name);
+      if (handle) {
+        await handle.close();
+        this._tables.delete(name);
+      }
+      if (existing.has(name)) await this.db.dropTable(name);
+    }
   }
 
   /** Close the database connection. */

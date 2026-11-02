@@ -6,7 +6,7 @@
 
 import {
   createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync, statSync, existsSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 
@@ -145,6 +145,23 @@ export interface DaemonOptions {
   embeddingBatchSize?: number;
   /** Set when the index was built by another model (ADR-015 degraded mode). */
   mismatch?: Error;
+  /**
+   * ADR-015: rebuild the embedding space under `modelId` (or the configured
+   * model when omitted) and hand back the fresh handles.
+   *
+   * Injected rather than imported so the daemon stays out of model resolution
+   * and weight loading. It must work when the daemon is running degraded with
+   * no db and no embedder, because that is precisely the state `/reembed`
+   * exists to escape.
+   */
+  rebuild?: (modelId?: string) => Promise<RebuildResult>;
+}
+
+/** What a rebuild hands back once the new embedding space exists on disk. */
+export interface RebuildResult {
+  schema: LanceDbSchema;
+  provider: EmbeddingProvider;
+  maxVectorUnitTokens: number;
 }
 
 // ── Daemon ────────────────────────────────────────────────────────────
@@ -1689,112 +1706,145 @@ export class Daemon {
     return orphans.length;
   }
 
-  private async _handleReembed(_req: IncomingMessage, res: ServerResponse): Promise<void> {
-    if (!this.db || !this.embedder) {
+  /**
+   * ADR-015 §3: re-embedding is a drop-and-requeue rebuild, never a vector swap.
+   *
+   * Drops every content-derived table, pins the new model, then seeds the normal
+   * ingestion queue with a full rescan of each registered project and returns at
+   * once. The rebuild proceeds in the background at the queue's usual rate, so
+   * there is no long-lived request to time out; progress is read from
+   * `prag status` (ADR-015 §4).
+   *
+   * The previous implementation re-embedded `chunks_pool` in place. That could
+   * not absorb a dimension change, reused vectorised-unit boundaries measured
+   * with the old tokenizer (ADR-014), and ignored `{ model }` outright, so
+   * `prag reembed --model X` silently re-embedded with the current model.
+   */
+  private async _handleReembed(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const rebuild = this._options.rebuild;
+    if (!rebuild) {
+      // Not SERVICE_UNAVAILABLE: the daemon is fine, it was just constructed
+      // without the hook (an embedded test daemon). Saying "no embedding
+      // provider, run prag reembed" here was circular advice to the one caller
+      // already running reembed.
       this.sendError(res, 503, "SERVICE_UNAVAILABLE",
-        "no embedding provider is available",
-      "Start the daemon with a working PRAG_EMBEDDING_MODEL, or run `prag reembed`.");
+        "this daemon was started without a rebuild hook",
+        "Start the daemon with `prag daemon start` rather than embedding it directly.");
       return;
     }
 
-    // Two sweeps at once would interleave writes to vector_pool, and the second
-    // would report success over a half-rewritten index.
+    let model: string | undefined;
+    const raw = await readBody(req).catch(() => null);
+    if (raw && raw.trim() !== "") {
+      let parsed: { model?: unknown };
+      try {
+        parsed = JSON.parse(raw) as { model?: unknown };
+      } catch {
+        this.sendError(res, 400, "INVALID_REQUEST", "the request body is not valid JSON");
+        return;
+      }
+      if (parsed.model !== undefined && parsed.model !== null) {
+        if (typeof parsed.model !== "string" || parsed.model.trim() === "") {
+          this.sendError(res, 400, "INVALID_REQUEST", "'model' must be a non-empty string");
+          return;
+        }
+        model = parsed.model.trim();
+      }
+    }
+
+    // Two rebuilds at once would race on the same tables, and the second would
+    // report success over a half-dropped index.
     if (this._reembedding) {
       this.sendError(res, 409, "REEMBED_IN_PROGRESS",
-        "a re-embedding sweep is already running",
+        "a re-embedding rebuild is already running",
         "Wait for it to finish (`prag status` reports progress), then retry.");
       return;
     }
     this._reembedding = true;
 
-    let requeued = 0;
-
     try {
-      const chunks = await this.db.table("chunks_pool")
-        .query()
-        .limit(10000)
-        .toArray() as Array<{ chunkHash: string; text: string; scopeContext: string | null }>;
+      // The hook drops the content tables, writes the sidecar and reopens the
+      // database at the new dimension. `grants` and `projects` survive it, which
+      // is what lets the requeue below know what to rescan.
+      const rebuilt = await rebuild(model);
 
-      if (chunks.length === 0) {
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ requeued: 0, total: 0 }));
-        return;
+      const previous = this.db;
+      this.db = rebuilt.schema;
+      this.embedder = rebuilt.provider;
+      this._options = { ...this._options, maxVectorUnitTokens: rebuilt.maxVectorUnitTokens };
+      // The index now matches the configured model, so the daemon leaves
+      // degraded mode and serves every route again (ADR-015 §2).
+      this._mismatch = null;
+      this.mcpHandler = new McpHandler(rebuilt.schema, rebuilt.provider, {
+        watchUri: (o) => this.watchUri(o),
+        applyGrant: (pattern, action, reason) => this.applyGrant(pattern, action, reason),
+        prune: (gcChunks) => this.prune(gcChunks),
+        statusFor: (uri) => this.statusFor(uri),
+        currentBranch: (projectId) => this.currentBranchFor(projectId),
+      });
+      // Only after the swap: closing the old handles first would leave the
+      // daemon with no database at all if the rebuild threw.
+      if (previous && previous !== rebuilt.schema) await previous.close();
+
+      const projects = (await this.db.table("projects").query().limit(1000).toArray()) as Array<{
+        projectId: string;
+        rootUri: string;
+        name: string;
+        isGit: boolean;
+        defaultCooldownSeconds: number;
+        registeredAt: Date;
+        lastSyncedAt: Date | null;
+      }>;
+
+      // 'indexing' before the queue is seeded, so a status read between the two
+      // never shows 'active' over an index that was just emptied.
+      if (projects.length > 0) {
+        await upsertProjects(this.db.table("projects"), projects.map((p) => ({
+          ...p,
+          status: "indexing",
+          lastSyncedAt: null,
+        })));
       }
 
-      // Units the sweep will not rewrite have to go (a chunk that now splits into
-      // fewer windows), or a query can still hit a vector from the previous model.
-      // Diffed up front and deleted only after the sweep succeeds: clearing the
-      // pool first left the index with zero vectors whenever a later batch failed.
-      const before = await this.db
-        .table("vector_pool")
-        .query()
-        .select(["chunkHash", "unitIndex"])
-        .limit(100000)
-        .toArray() as Array<{ chunkHash: string; unitIndex: number }>;
-
-
-      // Re-embed in batches. Rows are keyed by (chunkHash, unitIndex) and merged,
-      // so the sweep never empties the pool: an earlier `delete("true")` here left
-      // the index with zero vectors whenever a later batch failed.
-      const batchSize = this._options.embeddingBatchSize ?? DEFAULT_EMBEDDING_BATCH;
-      const { tokenizer, maxTokens, overlap } = this._unitSplit(this.embedder);
-      const written: Array<{ chunkHash: string; unitIndex: number }> = [];
-      for (let i = 0; i < chunks.length; i += batchSize) {
-        const batch = chunks.slice(i, i + batchSize);
-        // One chunk is several vector units (ADR-014), so the sweep must split it
-        // exactly as ingestion does. Writing unitIndex 0 only left every re-embedded
-        // chunk searchable by its first window and silent for the rest.
-        const texts: string[] = [];
-        const rows: Array<{ chunkHash: string; unitIndex: number }> = [];
-        for (const chunk of batch) {
-          const units = splitVectorUnits(
-            chunk.text,
-            chunk.scopeContext ?? "",
-            tokenizer,
-            maxTokens,
-            overlap,
-          );
-          units.forEach((_unit, unitIndex) => {
-            texts.push(units.length === 1 ? chunk.text : units[unitIndex]!);
-            rows.push({ chunkHash: chunk.chunkHash, unitIndex });
-          });
+      let requeued = 0;
+      for (const project of projects) {
+        const dirPath = fileURLToPath(project.rootUri);
+        if (!existsSync(dirPath)) {
+          // A registered root that has since been deleted must not abort the
+          // rebuild of every other project.
+          console.error(`[prag] reembed: skipping ${project.projectId}, ${dirPath} is gone`);
+          continue;
         }
-        const vectors = await this.embedder.embedBatch(texts);
-
-        await upsertVectorPool(
-          this.db.table("vector_pool"),
-          rows.map((row, j) => ({ ...row, vector: vectors[j]! })),
+        // Re-registering with chokidar's ignoreInitial: false is the full
+        // rescan: every file is re-read, re-parsed and re-embedded from source.
+        this.ingestionQueue?.unregisterProject(project.projectId);
+        this.ingestionQueue?.registerProject(
+          project.projectId,
+          dirPath,
+          project.defaultCooldownSeconds * 1000,
         );
-        requeued += batch.length;
-        written.push(...rows);
-      }
-
-      const kept = new Set(written.map((r) => `${r.chunkHash}#${r.unitIndex}`));
-      const stale = before.filter((r) => !kept.has(`${r.chunkHash}#${r.unitIndex}`));
-      if (stale.length > 0) {
-        // Keyed deletes rather than delete("true"): the surviving vectors are
-        // never dropped, so the index stays searchable throughout.
-        for (const row of stale) {
-          await this.db
-            .table("vector_pool")
-            .delete(`chunkHash = '${row.chunkHash}' AND unitIndex = ${row.unitIndex}`);
-        }
+        requeued++;
       }
 
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ requeued, total: chunks.length, staleRemoved: stale.length }));
+      res.end(JSON.stringify({
+        requeued,
+        model: rebuilt.provider.model,
+        dim: rebuilt.provider.dim,
+      }));
     } catch (err) {
-      // A partial sweep must be reported: answering 200 with zeros hid the fact
-      // that the index had just been rewritten by an interrupted sweep.
-      this.sendInternal(res, "INTERNAL", "the re-embedding sweep failed", err);
+      // A failed rebuild may have dropped tables already. Reporting 200 with a
+      // zeroed counter hid exactly that, so the envelope is mandatory here.
+      this.sendInternal(res, "INTERNAL", "the re-embedding rebuild failed", err);
     } finally {
       this._reembedding = false;
     }
   }
 
   /**
-   * How a chunk is cut into vector units. Ingestion and reembed must agree
-   * exactly, or a sweep silently changes which part of a chunk is findable.
+   * How a chunk is cut into vector units (ADR-014). Only ingestion uses this
+   * now: a re-embed rebuilds from source through this same path rather than
+   * reusing boundaries that the previous model's tokenizer measured.
    */
   private _unitSplit(embedder: EmbeddingProvider): {
     tokenizer: Tokenizer;

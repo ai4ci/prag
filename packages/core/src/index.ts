@@ -19,6 +19,7 @@ export {
   LanceDbSchema,
   API_VERSION,
   ALL_TABLES,
+  CONTENT_TABLES,
   schemaDiff,
   upsertGrants,
   upsertProjects,

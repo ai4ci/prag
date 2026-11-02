@@ -114,7 +114,6 @@ _(no results)_
 - [Spike native addon support under Bun (LanceDB, ONNX, Tree-sitter)](tasks/toolchain-spike-native-addons.md)
 - [Construct thread-safe background queue with Chokidar debouncing](tasks/daemon-ingestion-queue.md)
 - [Build Tree-sitter and LiteParse parser routing in @prag/daemon](tasks/daemon-parser-router.md)
-- [Implement pinned embedding model detection and prag reembed rebuild](tasks/embedding-model-migration.md)
 - [Implement LiteParse layout-preserving PDF/DOCX to Markdown pipeline](tasks/liteparse-document-pipeline.md)
 - [Implement hardware acceleration provider selection and local-first enforcement](tasks/local-first-enforcement.md)
 - [Define the capability-negotiating web fetch backend interface](tasks/web-fetch-backend-interface.md)

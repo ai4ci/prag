@@ -269,7 +269,11 @@ export async function main(): Promise<void> {
       if (best?.scopeContext) console.log(`Scope: ${best.scopeContext}`);
       console.log("-".repeat(80));
     }
-    console.log(`\n${result.totalChunks} total chunks indexed`);
+    // Not the index size: `totalChunks` is the fused RRF candidate pool for this
+    // one query, so it moves with the query, the embedder and how many widening
+    // rounds the search needed. Labelling it "indexed" made it look like a count
+    // of the corpus, which changed between two searches of the same index.
+    console.log(`\n${result.totalChunks} candidates considered`);
     return;
   }
 
@@ -436,7 +440,14 @@ export async function main(): Promise<void> {
   if (cmd === "reembed") {
     const model = getFlag(rest, "--model", "-m");
     const result = await daemonClient.reembed(model);
-    console.log(`Re-embed requeued ${result.requeued} projects. Check status to track progress.`);
+    // The model is echoed because the index has just been dropped and pinned to
+    // it: a silent disagreement between --model and what was pinned is the bug
+    // this command used to have.
+    console.log(
+      `Re-embed rebuilt the index under ${result.model} (dim ${result.dim}).\n` +
+        `Requeued ${result.requeued} project(s) for a full rescan; ` +
+        `run \`prag status\` to track progress.`,
+    );
     return;
   }
 

@@ -112,6 +112,66 @@ export interface Startup {
 }
 
 /**
+ * ADR-015 §3: perform a re-embed rebuild and hand the daemon fresh handles.
+ *
+ * Lives here rather than in the daemon because it is the only place that knows
+ * how to resolve a model id to a provider and how to size the ADR-014 window.
+ * It is deliberately usable with no live database: a daemon running degraded
+ * after a model mismatch has neither, and `/reembed` is the documented way out
+ * of exactly that state.
+ */
+export async function rebuildEmbeddingSpace(
+  config: DaemonConfig,
+  existing: LanceDbSchema | null,
+  modelId?: string,
+): Promise<{ schema: LanceDbSchema; provider: EmbeddingProvider; maxVectorUnitTokens: number }> {
+  const paths = config.paths ?? resolvePragPaths();
+  const dbPath = dbPathFor(paths);
+
+  // An explicit --model wins; otherwise rebuild under whatever is configured,
+  // which is the mismatch case: the index is stale, the config is right.
+  const provider = resolveEmbeddingModel(modelId ?? embeddingModelId(config));
+  await provider.load?.();
+
+  const maxTokens =
+    config.maxVectorUnitTokens ??
+    Math.min(DEFAULT_MAX_VECTOR_UNIT_TOKENS, provider.maxSeqLength);
+  // Before anything is dropped: refusing here leaves the old index intact,
+  // whereas refusing after the drop would destroy it for a config that cannot
+  // start anyway (ADR-014).
+  assertVectorUnitBudget(maxTokens, provider.maxSeqLength);
+
+  // The drop needs a connection. In degraded mode there is none, so open a
+  // throwaway schema at the *old* dimension purely to drop the content tables;
+  // its own vector_pool definition is irrelevant because that table is going.
+  const opener = existing ?? new LanceDbSchema({ dbPath });
+  if (!existing) await opener.init();
+  await opener.dropContentTables();
+  await opener.close();
+
+  // Reopened at the new dimension. The content tables no longer exist, so
+  // init() recreates them to the new schema; grants and projects are untouched.
+  const schema = new LanceDbSchema({
+    dbPath,
+    embeddingDim: provider.dim,
+    maxVectorUnitTokens: maxTokens,
+    modelMaxSeqLength: provider.maxSeqLength,
+  });
+  await schema.init();
+
+  // Pinned only once the new space exists: a sidecar written before the drop
+  // would describe an index that failed to rebuild (ADR-015 §5).
+  writeEmbeddingSidecar(dbPath, {
+    model: provider.model,
+    dim: provider.dim,
+    maxSeqLength: provider.maxSeqLength,
+    pinnedAt: new Date().toISOString(),
+  });
+
+  return { schema, provider, maxVectorUnitTokens: maxTokens };
+}
+
+/**
  * Build every runtime dependency. Throws (before binding a port) when:
  *  - the configured ADR-014 window cannot fit the model's ceiling, or
  *  - an existing index was built by a different embedding model (ADR-015).
@@ -165,10 +225,18 @@ export async function bootstrap(
   }
 
   const daemon = new Daemon(config);
+  // `current` tracks the live schema so a second reembed drops through the
+  // handle the first one left behind, not the stale one captured here.
+  let current: LanceDbSchema = schema;
   await daemon.start(schema, provider, {
     maxVectorUnitTokens: maxTokens,
     vectorUnitOverlapTokens: config.vectorUnitOverlapTokens,
     embeddingBatchSize: config.batchSize,
+    rebuild: async (id) => {
+      const next = await rebuildEmbeddingSpace(config, current, id);
+      current = next.schema;
+      return next;
+    },
   });
 
   return { daemon, schema, provider, config };
@@ -230,7 +298,20 @@ async function main(): Promise<void> {
       // user has a way to fix the index instead of a daemon that exits.
       console.error(`[prag] ${err.message}`);
       const degraded = new Daemon(config);
-      await degraded.start(null, null, { mismatch: err });
+      // The hook is the whole point of staying up: without it /reembed answers
+      // 503 and the mismatch is unescapable without deleting the data directory
+      // by hand. `null` because degraded mode holds no open database.
+      let rebuilt: LanceDbSchema | null = null;
+      await degraded.start(null, null, {
+        mismatch: err,
+        vectorUnitOverlapTokens: config.vectorUnitOverlapTokens,
+        embeddingBatchSize: config.batchSize,
+        rebuild: async (id) => {
+          const next = await rebuildEmbeddingSpace(config, rebuilt, id);
+          rebuilt = next.schema;
+          return next;
+        },
+      });
       writeRuntimeFiles(
         config.paths ?? resolvePragPaths(),
         degraded.boundPort ?? config.port ?? 0,
