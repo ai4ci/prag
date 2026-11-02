@@ -18,7 +18,46 @@ import {
   type LanceDbSchema,
   type EmbeddingProvider,
   hybridSearch,
+  DaemonFailure,
+  type ErrorEnvelope,
+  type FailureCode,
 } from "@prag/core";
+import { assertProjectRegistered } from "./project-lookup.js";
+
+/**
+ * ADR-022 §2: a failing tool answers `isError: true` whose content is the same
+ * envelope the HTTP API returns, so an MCP client branches on `code` exactly as
+ * the CLI does. Message text is never the contract.
+ *
+ * Exported so the mapping is testable without a full MCP session handshake.
+ */
+export function toolFailure(err: unknown) {
+  const failure =
+    err instanceof DaemonFailure
+      ? err
+      : new DaemonFailure("INTERNAL", "the tool could not be completed");
+  if (!(err instanceof DaemonFailure)) console.error("[prag] mcp tool failure:", err);
+  const envelope: ErrorEnvelope = { error: failure.toEnvelope().error };
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(envelope) }],
+    isError: true,
+  };
+}
+
+/** Writes an ADR-022 envelope directly (used before the JSON-RPC layer exists). */
+function writeEnvelope(
+  res: ServerResponse,
+  status: number,
+  code: FailureCode,
+  message: string,
+  remedy?: string,
+): void {
+  const envelope: ErrorEnvelope = {
+    error: { code, message, ...(remedy ? { remedy } : {}) },
+  };
+  res.writeHead(status, { "Content-Type": "application/json" });
+  res.end(JSON.stringify(envelope));
+}
 
 // ── Handler ───────────────────────────────────────────────────────────
 
@@ -48,6 +87,7 @@ export class McpHandler {
     );
   }
 
+
   /** Handle an incoming request: GET → SSE stream, POST → JSON-RPC message. */
   async handle(
     req: IncomingMessage,
@@ -60,8 +100,16 @@ export class McpHandler {
     if (req.method === "POST") {
       return this._handleMessage(req, res, url);
     }
-    res.writeHead(405);
-    res.end("Method not allowed\n");
+    // ADR-022 §1: no endpoint returns a bare string, not even the transport.
+    const envelope: ErrorEnvelope = {
+      error: {
+        code: "METHOD_NOT_ALLOWED",
+        message: `${req.method} is not allowed on /mcp`,
+        remedy: "Open the SSE stream with GET, then POST JSON-RPC to the returned endpoint.",
+      },
+    };
+    res.writeHead(405, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(envelope));
   }
 
   /** Close all active transports (called on daemon shutdown). */
@@ -89,7 +137,10 @@ export class McpHandler {
         "Search indexed content scoped to one project. Requires a projectId.",
       inputSchema: {
         query: z.string().describe("Search query"),
-        projectId: z.string().describe("Project ID to scope the search to"),
+        projectId: z
+          .string()
+          .optional()
+          .describe("Project ID to scope the search to (required; ADR-018)"),
         limit: z
           .number()
           .optional()
@@ -98,6 +149,16 @@ export class McpHandler {
       },
     }, async ({ query, projectId, limit }) => {
       try {
+        if (!projectId) {
+          // Optional in the schema so the failure arrives as an envelope with a
+          // remedy, rather than as a schema-validation error with prose.
+          throw new DaemonFailure(
+            "PROJECT_ID_REQUIRED",
+            "search_local requires a projectId",
+            "Pass projectId, or call search_all to search every project.",
+          );
+        }
+        await assertProjectRegistered(this.db, projectId);
         const result = await this._search(query, limit ?? 10, projectId);
         return {
           content: [
@@ -108,15 +169,7 @@ export class McpHandler {
           ],
         };
       } catch (err) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Search error: ${(err as Error).message}`,
-            },
-          ],
-          isError: true,
-        };
+        return toolFailure(err);
       }
     });
 
@@ -141,15 +194,7 @@ export class McpHandler {
           ],
         };
       } catch (err) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Search error: ${(err as Error).message}`,
-            },
-          ],
-          isError: true,
-        };
+        return toolFailure(err);
       }
     });
 
@@ -172,15 +217,7 @@ export class McpHandler {
           ],
         };
       } catch (err) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Error listing grants: ${(err as Error).message}`,
-            },
-          ],
-          isError: true,
-        };
+        return toolFailure(err);
       }
     });
 
@@ -210,15 +247,7 @@ export class McpHandler {
           ],
         };
       } catch (err) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Error listing projects: ${(err as Error).message}`,
-            },
-          ],
-          isError: true,
-        };
+        return toolFailure(err);
       }
     });
 
@@ -240,8 +269,8 @@ export class McpHandler {
       await this.server.connect(transport);
     } catch {
       if (!res.headersSent) {
-        res.writeHead(500);
-        res.end("Internal server error\n");
+        writeEnvelope(res, 500, "INTERNAL", "the MCP stream could not be opened",
+          "See the daemon log, or check that the index is open (`prag daemon status`).");
       }
     }
   }
@@ -253,24 +282,28 @@ export class McpHandler {
     res: ServerResponse,
     url: URL,
   ): Promise<void> {
+    // These three checks happen before the JSON-RPC layer, so they answer with
+    // the same HTTP envelope as the REST API rather than a JSON-RPC error
+    // (ADR-022 §1: no endpoint returns a bare string).
     const sessionId = url.searchParams.get("sessionId");
     if (!sessionId) {
-      res.writeHead(400);
-      res.end("Missing sessionId\n");
+      writeEnvelope(res, 400, "INVALID_REQUEST", "missing sessionId query parameter",
+        "Open the SSE stream with GET /mcp and POST to the endpoint it returns.");
       return;
     }
     const transport = this.transports.get(sessionId);
     if (!transport) {
-      res.writeHead(404);
-      res.end("Session not found\n");
+      writeEnvelope(res, 404, "NOT_FOUND", `unknown MCP session`,
+        "Re-open the SSE stream with GET /mcp to obtain a fresh sessionId.");
       return;
     }
     try {
       await transport.handlePostMessage(req, res);
-    } catch {
+    } catch (err) {
+      console.error("[prag] mcp transport failure:", err);
       if (!res.headersSent) {
-        res.writeHead(500);
-        res.end("Internal server error\n");
+        writeEnvelope(res, 500, "INTERNAL", "the MCP message could not be handled",
+          "See the daemon log for the underlying error.");
       }
     }
   }

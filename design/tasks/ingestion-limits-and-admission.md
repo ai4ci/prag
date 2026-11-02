@@ -9,10 +9,13 @@ relates-to:
 addressed-by:
   - src:daemon/src/ingestion-queue.ts#IngestionQueue
   - src:daemon/src/ingestion-queue.ts#IngestionConfig
+  - src:core/src/discovery.ts#discoveryDryRun
+  - src:daemon/src/daemon.ts#_handleWatchUri
   - src:cli/src/main.ts#summarizeSkipped
 tested-by:
   - daemontest:ingestion-queue.test.ts#ingestionQueueSuite
   - daemontest:ingestion-e2e.test.ts#daemonWithIngestionSuite
+  - daemontest:watch-admission.test.ts#watchAdmissionSuite
   - clitest:e2e.test.ts#cLIEndToEndSuite
 ---
 ## Objective
@@ -97,3 +100,33 @@ grants gate below to be meaningful.
 Remaining: implement the discovery dry run + threshold + `--yes` and the MCP `WATCH_LIMIT_EXCEEDED` variant; make the ingestion
 dispatch check `projects.status = 'paused'`; honour `workerPoolSize`/`batchSize` as the
 throughput bound; add the `denied` counter once grants gate admission.
+
+**Admission control, pause and the denied counter are implemented** (2026-11-02, `41f1cd2`):
+- **Discovery dry run — DONE.** `discoveryDryRun()` (`packages/core/src/discovery.ts`) walks a
+  tree counting files, child git repos and per-reason skips, without reading file bodies past the
+  8KB probe. `POST /projects/watch` (`daemon.ts` `_handleWatchUri`) writes the allow grant, runs
+  the dry run, and answers `409 WATCH_LIMIT_EXCEEDED` with `{projects, files, threshold}` in
+  `details` and **nothing written** when past `ingestion.watchConfirmThreshold` without
+  `confirm`. `prag watch` sends `--yes`/`-y` as `confirm` and prints the counts.
+- **Grants gate admission — DONE.** `_checkFile` consults the grants table (through a 1s cache,
+  invalidated by every grant mutation) *before opening the file*, so a deny on a secret means it
+  is never read. Both the watcher and `/sync` route through this one gate, which is why a deny
+  cannot be raced by an already-queued event. `denied` is now a real counter, and the dry run
+  reports a denied subtree as excluded rather than indexable.
+- **`prag deny` now excludes — DONE.** It removes the covered `file_mapping`/`chunk_mapping` rows
+  (pool rows stay: they are content-addressed and shared — `--gc-chunks` owns reclamation) and
+  un-watches the project whose root lies under the pattern, so the path stops producing events.
+- **Pause is a gate — DONE.** Admission reads project status; a paused project's events are
+  dropped, and `resume` forces a full re-walk (`IngestionQueue.rescan`) because the incremental
+  walk is mtime-based and would consider writes made while paused already seen.
+- **Non-local URIs refuse — DONE.** A non-`file://` URI to `/projects/watch` returns
+  `503 CRAWL_BACKEND_REQUIRED` (ADR-024) instead of writing a grant that indexes nothing.
+
+Asserted by `daemontest:watch-admission.test.ts` (6 tests: refusal changes nothing, `confirm`
+indexes the tree, deny purges + blocks re-indexing and increments `denied`, a denied directory is
+excluded at discovery, pause holds a file that resume then indexes, `CRAWL_BACKEND_REQUIRED`).
+
+Remaining: the **rate cap** (honour `ingestion.workerPoolSize`/`embedding.batchSize` as a
+throughput bound — `WorkerPool` still has no concurrency term beyond worker count) and the MCP
+`watch_uri` tool, which needs `task:mcp-server-endpoint.md` and must reuse
+`_handleWatchUri`'s threshold logic rather than reimplement it.

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import crypto from "node:crypto";
 import { resolvePragPaths } from "@prag/core";
-import { DaemonClient, DaemonError, ExitCode } from "./daemon-client.js";
+import { DaemonClient, DaemonError, ExitCode, exitForCode } from "./daemon-client.js";
 
 function usage(exitCode = ExitCode.USAGE): never {
   const text = `Usage: prag <command> [args]
@@ -192,7 +192,7 @@ export async function main(): Promise<void> {
 
   // ── Search commands ─────────────────────────────────────
   if (cmd === "search-local" || cmd === "search-all") {
-    const query = rest.join(" ");
+    const query = positional(rest).join(" ");
     if (!query) {
       console.error("search-local requires a query string");
       usage(ExitCode.USAGE);
@@ -242,7 +242,7 @@ export async function main(): Promise<void> {
 
   // ── Grant commands ──────────────────────────────────────
   if (cmd === "watch") {
-    const uri = rest[0];
+    const uri = positional(rest)[0];
     if (!uri) { console.error("watch requires a URI"); usage(ExitCode.USAGE); }
     const normalizedUri = normalizeUri(uri);
     // projectId is the normalized root URI (cli-and-mcp-interface.md), which is
@@ -274,7 +274,7 @@ export async function main(): Promise<void> {
   }
 
   if (cmd === "deny") {
-    const uri = rest[0];
+    const uri = positional(rest)[0];
     if (!uri) { console.error("deny requires a URI"); usage(ExitCode.USAGE); }
     const normalizedUri = normalizeUri(uri);
     const res = await daemonClient.addGrant(`${normalizedUri}/**`, "deny");
@@ -446,6 +446,32 @@ function normalizeUri(input: string): string {
 }
 
 /** Extract a flag value from rest args. Looks for --long and -short forms. */
+/** Value-bearing flags, so their tokens can be dropped from the query string. */
+const VALUE_FLAGS = new Set([
+  "--project", "-p", "--limit", "-n", "--mode", "-m", "--uri", "-u",
+]);
+
+/**
+ * The query words, with flags removed. `rest.join(" ")` silently made the flags
+ * part of the search text, so `prag search-local greet -p x --json` searched for
+ * "greet -p x --json" — different results, and no way to say what you meant.
+ *
+ * shortcut: a query word beginning with "-" is read as a flag; quote-free
+ * negative-number queries are not supported.
+ */
+function positional(args: string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!;
+    if (a.startsWith("--") || (a.startsWith("-") && a.length > 1)) {
+      if (VALUE_FLAGS.has(a)) i++;
+      continue;
+    }
+    out.push(a);
+  }
+  return out;
+}
+
 function getFlag(rest: string[], long: string, short?: string): string | undefined {
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i];
@@ -479,15 +505,25 @@ if (/packages\/cli\/src\/main\.ts$/.test(process.argv[1] ?? "")) {
 export function run(): Promise<void> {
   return main().catch((err) => {
     if (err instanceof DaemonError) {
-      console.error(`Error [${err.code}]: ${err.message}`);
-      if (err.remedy) console.error(`Remedy: ${err.remedy}`);
-      process.exit(
-        err.code === "NO_DAEMON" ? ExitCode.NO_DAEMON :
-        err.code === "API_VERSION_MISMATCH" ? ExitCode.VERSION_MISMATCH :
-        err.code === "PORT_CONFLICT" ? ExitCode.VERSION_MISMATCH :
-        err.code === "AUTH_FAILED" ? ExitCode.AUTH_ERROR :
-        ExitCode.FAILURE,
-      );
+      // ADR-022 §4: default output is `message` then `remedy`, nothing else;
+      // --json emits the envelope verbatim so scripts get what the API returned.
+      // The code is deliberately absent from prose — it is in the envelope.
+      if (process.argv.includes("--json")) {
+        console.log(
+          JSON.stringify({
+            error: {
+              code: err.code,
+              message: err.message,
+              ...(err.remedy ? { remedy: err.remedy } : {}),
+              ...(err.details ? { details: err.details } : {}),
+            },
+          }),
+        );
+      } else {
+        console.error(err.message);
+        if (err.remedy) console.error(err.remedy);
+      }
+      process.exit(exitForCode(err.code));
     } else if (err instanceof Error) {
       console.error(`Unexpected error: ${err.message}`);
       process.exit(ExitCode.FAILURE);

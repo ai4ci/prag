@@ -157,12 +157,43 @@ function subprocessEndToEndSuite(): void {
   });
 
   void it("scoping hides another project's identical content", async () => {
-    const { stdout } = await runPrag(
+    // A registered project that indexes nothing: the identical content in
+    // sub-proj must not leak across the boundary (ADR-018).
+    const emptyDir = join(ctx.root, "empty-proj");
+    mkdirSync(emptyDir, { recursive: true });
+    const reg = await fetch(`http://127.0.0.1:${ctx.port}/projects`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ projectId: "empty-proj", rootUri: emptyDir }),
+    });
+    assert.equal(reg.status, 200, await reg.text());
+
+    const scoped = await runPrag(["search-local", "greet", "-p", "empty-proj", "--json"], ctx.env);
+    assert.equal(scoped.code, 0, scoped.stderr);
+    const result = JSON.parse(scoped.stdout) as { hits: unknown[] };
+    assert.deepEqual(result.hits, [], "a project with no files returned results");
+
+    // ADR-022 §3: a search that matches nothing is a valid answer, not a failure.
+    // fts mode, because the vector side always returns a nearest neighbour.
+    const miss = await runPrag(
+      ["search-local", "zzzplutoniumqqq", "-p", "sub-proj", "--mode", "fts", "--json"],
+      ctx.env,
+    );
+    assert.equal(miss.code, 0, `a zero-result search must exit 0: ${miss.stderr}`);
+    assert.deepEqual((JSON.parse(miss.stdout) as { hits: unknown[] }).hits, []);
+  });
+
+  void it("naming an unregistered project is an error, not an empty result (ADR-018)", async () => {
+    // Empty and "you named nothing we know" must be distinguishable by code.
+    const { stdout, stderr, code } = await runPrag(
       ["search-local", "greet", "-p", "someone-else", "--json"],
       ctx.env,
     );
-    const result = JSON.parse(stdout) as { hits: unknown[] };
-    assert.deepEqual(result.hits, [], "a project with no files returned results");
+    assert.equal(code, 7, `expected NOT_GRANTED, got ${code}: ${stdout}${stderr}`);
+    // ADR-022 §4: --json emits the envelope verbatim, so `code` is assertable
+    // without matching on prose.
+    const env = JSON.parse(stdout) as { error: { code: string; message: string } };
+    assert.equal(env.error.code, "PROJECT_NOT_FOUND");
   });
 
   void it("search-all is the explicit unscoped path", async () => {

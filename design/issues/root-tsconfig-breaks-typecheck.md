@@ -37,8 +37,15 @@ Interacts with `issue:no-installation-instructions.md` (the same broken-package.
 `.github/workflows/ci.yaml`, which is tracked as a Pi todo because `.github/` is
 sandbox-protected and cannot be created from inside the sandbox.
 
-## Resolution (2026-11-02, branch `mvp`) — workaround, root cause still open
-`npm run lint` (root `tsc --noEmit`) still fails TS6059 for every package file, so the repo has no
-working whole-tree typecheck. Added `packages/daemon/tsconfig.check.json` (no `noUnusedLocals`,
-`include` pulls in core + cli sources) and a root `npm run typecheck` script that uses it; it
-covers all three packages transitively and is what CI should call until the root config is fixed.
+## Resolution (2026-11-02, branch `mvp`)
+`npm run lint` now runs `tsc -p packages/daemon/tsconfig.check.json`, which includes all three
+packages' `src` and `test` trees, so the whole monorepo is type-checked by one command. It exits 0
+on a clean tree, and a deliberate type error in any package fails it naming that file (verified by
+dropping a bad `packages/cli/src/_typecheck_probe.ts` and seeing
+`packages/cli/src/_typecheck_probe.ts(1,14): error TS2322`).
+
+The root `tsconfig.json` is unchanged: it is still what each package extends for compiler options,
+and its `rootDir: "${configDir}/src"` remains correct for per-package *builds*. What was wrong was
+running it bare at the root, where `${configDir}` resolves to the repository root and every package
+file falls outside it. The duplicated `typecheck` script was folded into `lint` rather than keeping
+two names for one check.

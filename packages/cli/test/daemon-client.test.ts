@@ -3,6 +3,7 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 
+import { EXIT, exitForCode } from "@prag/core";
 import { startTestDaemon, stopTestDaemon } from "@prag/daemon";
 import { DaemonClient } from "../src/daemon-client.js";
 import type { TestDaemonInstance } from "@prag/daemon";
@@ -35,12 +36,14 @@ function daemonClientSuite(): void {
     assert.equal(h, null);
   });
 
-  void it("checkHealth raises NO_DAEMON for unreachable daemon", async () => {
+  void it("checkHealth raises DAEMON_NOT_RUNNING, which exits 3", async () => {
     const deadClient = new DaemonClient("http://127.0.0.1:19998", "test");
     await assert.rejects(
       () => deadClient.checkHealth(),
-      (err: unknown) => (err as { code: string }).code === "NO_DAEMON",
+      (err: unknown) => (err as { code: string }).code === "DAEMON_NOT_RUNNING",
     );
+    // The exit code is the contract the shell sees (ADR-022 §3).
+    assert.equal(exitForCode("DAEMON_NOT_RUNNING"), EXIT.NO_DAEMON);
   });
 
   void it("checkApiVersion passes on match", () => {

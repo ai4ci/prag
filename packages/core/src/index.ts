@@ -31,6 +31,19 @@ export {
 } from "./database.js";
 
 export {
+  EXIT,
+  EXIT_FOR_CODE,
+  HTTP_STATUS_FOR_CODE,
+  exitForCode,
+  DaemonFailure,
+  type ErrorCode,
+  type ClientErrorCode,
+  type FailureCode,
+  type ErrorEnvelope,
+  type ExitCode,
+} from "./errors.js";
+
+export {
   discoveryDryRun,
   isDenied,
   isBuiltinIgnored,

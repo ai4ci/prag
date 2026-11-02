@@ -2,7 +2,13 @@
 import { spawn } from "node:child_process";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { resolvePragPaths, type SearchResult } from "@prag/core";
+import {
+  resolvePragPaths,
+  exitForCode,
+  type SearchResult,
+  type FailureCode,
+  type ErrorEnvelope,
+} from "@prag/core";
 
 const DEFAULT_PORT = 7724;
 const API_VERSION = 1;
@@ -25,6 +31,7 @@ export type {
   SearchChunkHit,
   SearchMode,
 } from "@prag/core";
+
 
 export interface HealthResponse {
   status: string;
@@ -87,18 +94,9 @@ export interface ReembedResult {
   requeued: number;
 }
 
-export interface ErrorEnvelope {
-  error: {
-    code: string;
-    message: string;
-    remedy?: string;
-    details?: Record<string, unknown>;
-  };
-}
-
 export class DaemonError extends Error {
   constructor(
-    public readonly code: string,
+    public readonly code: FailureCode,
     message: string,
     public readonly remedy?: string,
     public readonly details?: Record<string, unknown>,
@@ -126,25 +124,40 @@ function readToken(): string {
   return "guest";
 }
 
+/**
+ * Maps a transport-level failure onto a code, so a dead daemon and a rejected
+ * request are distinguishable by `code` rather than by message text.
+ *
+ * shortcut: any HTTP status that arrives without an envelope is reported as
+ * DAEMON_UNREACHABLE; upgrade when every 4xx/5xx path returns an envelope.
+ */
+function classifyFailure(status: number, detail: string): { code: FailureCode; message: string } {
+  const message = detail.trim() || `HTTP ${status}`;
+  if (status === 401) return { code: "UNAUTHORIZED", message };
+  if (status === 403) return { code: "ORIGIN_REJECTED", message };
+  if (status === 404) return { code: "NOT_FOUND", message };
+  if (status === 405) return { code: "METHOD_NOT_ALLOWED", message };
+  if (status === 503) return { code: "SERVICE_UNAVAILABLE", message };
+  return { code: "DAEMON_UNREACHABLE", message };
+}
+
 function parseError(status: number, body: string): DaemonError {
   try {
     const env = JSON.parse(body) as ErrorEnvelope;
-    return new DaemonError(
-      env.error.code,
-      env.error.message,
-      env.error.remedy,
-      env.error.details,
-      status,
-    );
+    if (env?.error?.code) {
+      return new DaemonError(
+        env.error.code,
+        env.error.message,
+        env.error.remedy,
+        env.error.details,
+        status,
+      );
+    }
   } catch {
-    return new DaemonError(
-      "HTTP_ERROR",
-      body.trim() || `HTTP ${status}`,
-      undefined,
-      undefined,
-      status,
-    );
+    /* body is not an envelope; classify it below */
   }
+  const { code, message } = classifyFailure(status, body);
+  return new DaemonError(code, message, undefined, undefined, status);
 }
 
 async function readBody(res: Response): Promise<string> {
@@ -175,6 +188,7 @@ enum ExitCode {
 }
 
 export { ExitCode };
+export { exitForCode };
 
 /**
  * Typed client for the prag daemon loopback HTTP API.
@@ -250,14 +264,16 @@ export class DaemonClient {
    * Throws DaemonError on mismatch.
    */
   async checkHealth(): Promise<HealthResponse> {
+    const port = () => this.baseUrl.slice(this.baseUrl.lastIndexOf(":") + 1);
     const h = await this.health();
-    if (!h) throw new DaemonError("NO_DAEMON", "Daemon is not running");
+    if (!h) throw new DaemonError("DAEMON_NOT_RUNNING", "Daemon is not running");
     if (h.service !== "prag-daemon") {
+      // ADR-016: a live listener that does not answer as prag is an identity
+      // mismatch, not a transport failure — exit 4, not 3.
       throw new DaemonError(
-        "PORT_CONFLICT",
-        `Port ${this.baseUrl.slice(this.baseUrl.lastIndexOf(":") + 1)} is in use by a different process. ` +
-          "Set PRAG_PORT or server.port in config.json to use a different port, or stop the conflicting process.",
-        "Set PRAG_PORT or server.port in config.json to use a different port, or stop the conflicting process.",
+        "DAEMON_IDENTITY_MISMATCH",
+        `port ${port()} is answered by a different process`,
+        "Set PRAG_PORT or server.port in config.json, or stop the conflicting process.",
       );
     }
     return h;
@@ -314,7 +330,7 @@ export class DaemonClient {
     }
 
     throw new DaemonError(
-      "NO_DAEMON",
+      "DAEMON_NOT_RUNNING",
       "Could not start daemon — timed out waiting for /health to respond.",
       "Check that @prag/daemon can start without errors, or set PRAG_PORT to a port your daemon can bind to.",
     );
@@ -452,7 +468,9 @@ export class DaemonClient {
 
   async shutdown(): Promise<void> {
     const { status } = await this._request("POST", "/shutdown");
-    if (status !== 200) throw new DaemonError("SHUTDOWN_FAILED", "Daemon did not acknowledge shutdown");
+    if (status !== 200) {
+      throw new DaemonError("SHUTDOWN_FAILED", "Daemon did not acknowledge shutdown");
+    }
   }
 
   // ── Status (infer project from cwd) ──────────────────────

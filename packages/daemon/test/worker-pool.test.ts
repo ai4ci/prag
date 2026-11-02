@@ -92,7 +92,7 @@ function workerPoolSuite(): void {
 
     // Submit all 3 files in parallel — only 1 worker, so 2 queue
     const results = await Promise.all(
-      files.map((fp) => pool.processFile("test-proj", fp)),
+      files.map((fp) => pool!.processFile("test-proj", fp)),
     );
 
     assert.equal(results.length, 3);
@@ -115,7 +115,7 @@ function workerPoolSuite(): void {
     }
 
     const results = await Promise.all(
-      files.map((fp) => pool.processFile("test-proj", fp)),
+      files.map((fp) => pool!.processFile("test-proj", fp)),
     );
 
     assert.equal(results.length, 6);

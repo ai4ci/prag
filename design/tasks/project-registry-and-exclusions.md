@@ -69,3 +69,30 @@ Remaining: drive watcher admission from the grants engine (directory-level, halt
 implement discovery + git-repository detection into `projects`; make `deny` unwatch and purge
 indexed content under the prefix; make `watch` trigger a scan; add the three MCP tools; extend
 `prag status` with per-project state.
+
+**Grant-driven admission, watch and deny are implemented** (2026-11-02, `41f1cd2`):
+- **Watcher consults grants — DONE, with one deviation.** Admission (`ingestion-queue.ts`
+  `_checkFile`) evaluates the grants table on every event *before opening the file*, so a deny is
+  revocation, not a filter applied after the damage. Deviation from the wording: chokidar still
+  descends into a denied directory — the per-file gate refuses it — while the discovery dry run
+  halts descent at the directory (`discovery.ts`). Practically equivalent (nothing denied is read
+  or counted) and cheaper than a chokidar `ignored` closure doing a grant lookup per dirent; the
+  counter consequence is that a denied subtree still produces watch events, which are then refused
+  and counted as `denied`.
+- **`deny` unwatch + purge — DONE.** `POST /grants` with `action=deny` removes the covered
+  `file_mapping`/`chunk_mapping` rows and un-watches the project whose root lies under the pattern
+  (`daemon.ts` `purgeDenied`, `_unwatchUnder`). Pool rows are deliberately kept: they are
+  content-addressed and shared across projects/branches, and `--gc-chunks` owns reclamation
+  (`issue:unlink-prune-deletes-shared-pool-rows.md`). ADR-009's revocation guarantee now holds for
+  search results.
+- **`watch` triggers a scan — DONE.** `prag watch` calls `POST /projects/watch`, which writes the
+  allow grant, dry-runs discovery and registers the watcher in one step, so the grant is never a
+  no-op.
+- **`prag status` — DONE for skip/queue state** (`3f1562d`): per-project skip counts plus the live
+  ingestion snapshot. Chunk counts per project are still not shown.
+
+Asserted by `daemontest:watch-admission.test.ts` and `daemontest:ingestion-e2e.test.ts`.
+
+Still remaining: discovery currently only *counts* child git repositories — it does not register
+each as its own `projects` row, so the atomic-repository semantics and the `$default` sentinel are
+still unimplemented; the three MCP tools are still absent (`task:mcp-server-endpoint.md`).

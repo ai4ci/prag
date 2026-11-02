@@ -42,7 +42,7 @@ function setup(cooldownMs = 100): TestCtx {
   const tmpDir = mkdtempSync(join(tmpdir(), "ingq-"));
   const ingested: ProcessResult[] = [];
   const pool = new WorkerPool(1, WORKER_SCRIPT);
-  const queue = new IngestionQueue(pool, (r) => ingested.push(r), {
+  const queue = new IngestionQueue(pool, (r) => { ingested.push(r); }, {
     cooldownMs,
   });
 

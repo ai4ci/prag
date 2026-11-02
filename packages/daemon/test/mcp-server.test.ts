@@ -4,8 +4,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { LanceDbSchema, FakeEmbeddingProvider } from "@prag/core";
+import { LanceDbSchema, FakeEmbeddingProvider, DaemonFailure } from "@prag/core";
 import { Daemon } from "../src/daemon.js";
+import { toolFailure } from "../src/mcp-server.js";
 
 function mCPServerSuite(): void {
   let tmpDir: string;
@@ -51,7 +52,7 @@ function mCPServerSuite(): void {
       let body = "";
       try {
         for (;;) {
-          const { done, value } = await reader.read({ signal: ac2.signal });
+          const { done, value } = await reader.read()  // Node's ReadableStream read() takes no arguments; abort closes the stream;
           if (done) break;
           body += new TextDecoder().decode(value);
           if (body.includes("sessionId=")) break;
@@ -61,6 +62,31 @@ function mCPServerSuite(): void {
       assert.ok(body.includes("/mcp?sessionId="));
       await reader.cancel().catch(() => {});
     }
+  });
+
+  // A full JSON-RPC tool call needs an established SSE session; the mapping from
+  // failure to MCP error content is the part ADR-022 constrains, so it is asserted
+  // directly rather than through the transport.
+  void it("a tool failure carries the ADR-022 envelope as isError content", () => {
+    const res = toolFailure(
+      new DaemonFailure("PROJECT_NOT_FOUND", "project 'x' is not registered", "Run prag projects", {
+        projectId: "x",
+      }),
+    );
+    assert.equal(res.isError, true);
+    const env = JSON.parse(res.content[0].text) as {
+      error: { code: string; message: string; remedy: string; details: { projectId: string } };
+    };
+    assert.equal(env.error.code, "PROJECT_NOT_FOUND");
+    assert.equal(env.error.remedy, "Run prag projects");
+    assert.equal(env.error.details.projectId, "x");
+  });
+
+  void it("an unexpected tool failure reports INTERNAL without leaking internals", () => {
+    const res = toolFailure(new Error("panic in lancedb at 0x7f.. stack"));
+    const env = JSON.parse(res.content[0].text) as { error: { code: string; message: string } };
+    assert.equal(env.error.code, "INTERNAL");
+    assert.ok(!env.error.message.includes("panic"), env.error.message);
   });
 
   void it("POST /mcp without sessionId returns 400", async () => {
@@ -74,8 +100,8 @@ function mCPServerSuite(): void {
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
     });
     assert.equal(res.status, 400);
-    const text = await res.text();
-    assert.ok(text.includes("sessionId"));
+    const env = (await res.json()) as { error: { code: string } };
+    assert.equal(env.error.code, "INVALID_REQUEST");
   });
 
   void it("POST /mcp with unknown sessionId returns 404", async () => {

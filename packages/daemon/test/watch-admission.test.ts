@@ -115,7 +115,10 @@ function watchAdmissionSuite(): void {
     for (const name of ["a.ts", "b.ts"]) {
       assert.ok(
         uris.some((u) => u.endsWith(name)),
-        `${name} not indexed after confirm: ${uris.join(", ")}`,
+        `${name} not indexed after confirm: sync=${JSON.stringify(sync.body)} ` +
+          `uris=${uris.join(", ")} skipped=${JSON.stringify(
+            (await json(ctx.port, "/projects", undefined, "GET")).body,
+          )}`,
       );
     }
   });

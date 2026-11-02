@@ -13,6 +13,8 @@ import { LanceDbSchema, FakeEmbeddingProvider } from "@prag/core";
 import { Daemon } from "./daemon.js";
 
 export interface TestDaemonInstance {
+  /** Fixture repos, present when started with `withFixtures`. */
+  fixtures?: { alpha: string; beta: string; plain: string };
   baseUrl: string;
   port: number;
   token: string;

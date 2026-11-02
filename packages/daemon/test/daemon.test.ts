@@ -99,7 +99,8 @@ function daemonSuite(): void {
     const res = await fetch(`http://127.0.0.1:${PORT}/health`, {
       headers: { Origin: "https://evil.com" },
     });
-    assert.equal(res.status, 403);
+    // 401: ADR-022 §2 groups a rejected Origin with an authentication failure.
+    assert.equal(res.status, 401);
   });
 
   void it("rejects unknown paths", async () => {

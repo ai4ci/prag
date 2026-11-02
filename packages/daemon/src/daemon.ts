@@ -30,7 +30,11 @@ import {
   upsertChunksPool,
   upsertVectorPool,
   evaluateUriGrants,
+  DaemonFailure,
+  HTTP_STATUS_FOR_CODE,
+  type ErrorCode,
   approximateTokenizer,
+  type Tokenizer,
   splitVectorUnits,
   DEFAULT_MAX_VECTOR_UNIT_TOKENS,
   DEFAULT_VECTOR_UNIT_OVERLAP_TOKENS,
@@ -38,6 +42,7 @@ import {
 } from "@prag/core";
 
 import { McpHandler } from "./mcp-server.js";
+import { assertProjectRegistered } from "./project-lookup.js";
 import { WorkerPool } from "./worker-pool.js";
 import { IngestionQueue, DEFAULT_COOLDOWN_MS } from "./ingestion-queue.js";
 import { type ProcessResult } from "./worker-pool.js";
@@ -55,6 +60,20 @@ const STATUS_CACHE_MS = 1_000;
 
 /** Endpoints still served while the index has a model mismatch (ADR-015). */
 export const MISMATCH_ALLOWED = new Set(["/health", "/reembed", "/shutdown"]);
+
+/** Routes that exist but accept POST only — used to answer 405 rather than 404. */
+const POST_ONLY_ROUTES = new Set([
+  "/search",
+  "/projects/watch",
+  "/grants",
+  "/grants/evaluate",
+  "/sync",
+  "/prune",
+  "/reembed",
+  "/pause",
+  "/resume",
+  "/shutdown",
+]);
 
 /** Chunks per embedBatch call when the caller does not override it. */
 const DEFAULT_EMBEDDING_BATCH = 32;
@@ -131,6 +150,8 @@ export class Daemon {
   private _options: DaemonOptions = {};
   /** ADR-015: set when the index's embedding space does not match the model. */
   private _mismatch: Error | null = null;
+  /** Guards against two concurrent POST /reembed sweeps. */
+  private _reembedding = false;
   /** In-flight ingestion writes; /sync waits for these to settle. */
   private _inflight = new Set<Promise<void>>();
   /** Files the worker failed on, so /sync can report them. */
@@ -298,6 +319,7 @@ export class Daemon {
     return (await this._pausedProjects()).has(projectId);
   }
 
+
   /**
    * Set of paused project ids, cached briefly for the same reason grants are:
    * admission runs per file, and a DB round trip per file would make a scan
@@ -423,13 +445,7 @@ export class Daemon {
 
     // ADR-014: one vector per vectorised unit, so an oversized chunk is embedded
     // as several overlapping windows under one chunkHash rather than truncated.
-    const tokenizer =
-      this.embedder.tokenizer ?? approximateTokenizer();
-    const maxTokens =
-      this._options.maxVectorUnitTokens ??
-      Math.min(DEFAULT_MAX_VECTOR_UNIT_TOKENS, this.embedder.maxSeqLength);
-    const overlap =
-      this._options.vectorUnitOverlapTokens ?? DEFAULT_VECTOR_UNIT_OVERLAP_TOKENS;
+    const { tokenizer, maxTokens, overlap } = this._unitSplit(this.embedder);
 
     const unitsPerChunk = result.chunks.map((c) =>
       splitVectorUnits(c.text, c.scopeContext ?? "", tokenizer, maxTokens, overlap),
@@ -499,15 +515,16 @@ export class Daemon {
   private async _handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const addr = req.socket.remoteAddress;
     if (addr !== "127.0.0.1" && addr !== "::1" && addr !== "::ffff:127.0.0.1") {
-      res.writeHead(403);
-      res.end("Forbidden: loopback only\n");
+      this.sendError(res, 401, "ORIGIN_REJECTED", "prag only accepts loopback connections",
+        "Connect over 127.0.0.1; prag has no remote mode by design.");
       return;
     }
 
     const origin = req.headers["origin"];
     if (origin && !/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(origin)) {
-      res.writeHead(403);
-      res.end("Forbidden: invalid Origin\n");
+      // 401, not 403: ADR-022 §2 groups a rejected Origin with an auth failure.
+      this.sendError(res, 401, "ORIGIN_REJECTED", `Origin header '${origin}' is not a local origin`,
+        "Call prag from a page served on 127.0.0.1 or localhost.");
       return;
     }
 
@@ -516,8 +533,8 @@ export class Daemon {
     if (url.pathname !== "/health" && req.method !== "OPTIONS") {
       const auth = req.headers["authorization"];
       if (!auth || !auth.startsWith("Bearer ") || auth.slice(7) !== this.token) {
-        res.writeHead(401);
-        res.end("Unauthorized\n");
+        this.sendError(res, 401, "UNAUTHORIZED", "missing or invalid bearer token",
+      "Send `Authorization: Bearer <PRAG_API_KEY>`; see `prag daemon token`.");
         return;
       }
     }
@@ -526,8 +543,8 @@ export class Daemon {
       if (this.mcpHandler) {
         return this.mcpHandler.handle(req, res, url);
       }
-      res.writeHead(503);
-      res.end("Service not initialized\n");
+      this.sendError(res, 503, "SERVICE_UNAVAILABLE", "the index is not open",
+        "Start the daemon with `prag daemon start` and retry.");
       return;
     }
 
@@ -542,8 +559,7 @@ export class Daemon {
       if (url.pathname === "/health") return this._handleHealth(req, res);
       if (url.pathname === "/projects") return this._handleGetProjects(req, res);
       if (url.pathname === "/grants") return this._handleGetGrants(req, res);
-      res.writeHead(404);
-      res.end("Not found\n");
+      this.sendError(res, 404, "NOT_FOUND", `no handler for ${req.method} ${url.pathname}`);
       return;
     }
 
@@ -559,20 +575,23 @@ export class Daemon {
       if (url.pathname === "/pause") return this._handlePauseResume(req, res, "paused");
       if (url.pathname === "/resume") return this._handlePauseResume(req, res, "active");
       if (url.pathname === "/shutdown") return this._handleShutdown(req, res);
-      res.writeHead(404);
-      res.end("Not found\n");
+      this.sendError(res, 404, "NOT_FOUND", `no handler for ${req.method} ${url.pathname}`);
       return;
     }
 
     if (req.method === "DELETE") {
       if (url.pathname === "/grants") return this._handleDeleteGrants(req, res);
-      res.writeHead(404);
-      res.end("Not found\n");
+      // A route that exists but not for this verb is 405, not 404: the difference
+      // tells a client whether to fix the path or the method (ADR-022).
+      if (POST_ONLY_ROUTES.has(url.pathname)) {
+        this.sendError(res, 405, "METHOD_NOT_ALLOWED", `${req.method} is not allowed on ${url.pathname}`);
+        return;
+      }
+      this.sendError(res, 404, "NOT_FOUND", `no handler for ${req.method} ${url.pathname}`);
       return;
     }
 
-    res.writeHead(405);
-    res.end("Method not allowed\n");
+    this.sendError(res, 405, "METHOD_NOT_ALLOWED", `${req.method} is not allowed on ${url.pathname}`);
   }
 
   private async _handleHealth(_req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -601,11 +620,11 @@ export class Daemon {
     }));
   }
 
-  /** ADR-022 error envelope — the shape the CLI already parses. */
+  /** ADR-022 error envelope — the shape the CLI and MCP clients parse. */
   private sendError(
     res: ServerResponse,
     status: number,
-    code: string,
+    code: ErrorCode,
     message: string,
     remedy?: string,
     details?: Record<string, unknown>,
@@ -614,14 +633,42 @@ export class Daemon {
     res.end(JSON.stringify({ error: { code, message, remedy, details } }));
   }
 
+  /**
+   * 500 is the only status whose response may be generic (ADR-022 §4): the
+   * detail goes to the daemon log with its stack, not to a response that may
+   * reach an agent.
+   */
+  private sendInternal(
+    res: ServerResponse,
+    code: ErrorCode,
+    message: string,
+    err: unknown,
+  ): void {
+    console.error(`[prag] ${message}:`, err);
+    this.sendError(res, 500, code, message, "See the daemon log for the underlying error.");
+  }
+
+  /** Answers with the status implied by the code, so the two cannot drift. */
+  private sendFailure(res: ServerResponse, failure: DaemonFailure): void {
+    const status = HTTP_STATUS_FOR_CODE[failure.code as ErrorCode] ?? 400;
+    this.sendError(
+      res,
+      status,
+      failure.code as ErrorCode,
+      failure.message,
+      failure.remedy,
+      failure.details,
+    );
+  }
+
   private async _handleSearch(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const body = await readBody(req);
     let queryOpts: Record<string, unknown>;
     try {
       queryOpts = JSON.parse(body);
     } catch {
-      res.writeHead(400);
-      res.end("Bad request: invalid JSON\n");
+      this.sendError(res, 400, "INVALID_REQUEST", "request body is not valid JSON",
+        "Send a JSON object with Content-Type: application/json");
       return;
     }
 
@@ -636,9 +683,20 @@ export class Daemon {
     }
 
     if (!this.db || !this.embedder) {
-      res.writeHead(503);
-      res.end("Service not initialized\n");
+      this.sendError(res, 503, "SERVICE_UNAVAILABLE", "the index is not open",
+        "Start the daemon with `prag daemon start` and retry.");
       return;
+    }
+
+    // ADR-018: an unknown project is a client error, not an empty result set —
+    // silently returning nothing would look like "no matches" to an agent.
+    if (projectId) {
+      try {
+        await assertProjectRegistered(this.db, projectId);
+      } catch (err) {
+        this.sendFailure(res, err as DaemonFailure);
+        return;
+      }
     }
 
     try {
@@ -657,14 +715,18 @@ export class Daemon {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify(result));
     } catch (err) {
-      this.sendError(res, 500, "SEARCH_FAILED", (err as Error).message);
+      // The detail belongs in the log, not in a response that may reach an agent
+      // (ADR-022 §4), so a search failure never leaks a query into a message.
+      console.error("[prag] search failed:", err);
+      this.sendError(res, 500, "SEARCH_FAILED", "the search could not be completed",
+        "See the daemon log for the underlying error.");
     }
   }
 
   private async _handleGetProjects(_req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (!this.db) {
-      res.writeHead(503);
-      res.end("Service not initialized\n");
+      this.sendError(res, 503, "SERVICE_UNAVAILABLE", "the index is not open",
+        "Start the daemon with `prag daemon start` and retry.");
       return;
     }
 
@@ -684,7 +746,7 @@ export class Daemon {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify(projects));
     } catch (err) {
-      this.sendError(res, 500, "INTERNAL", `could not list projects: ${(err as Error).message}`);
+      this.sendInternal(res, "INTERNAL", "could not list projects", err);
     }
   }
 
@@ -694,8 +756,8 @@ export class Daemon {
     try {
       projectOpts = JSON.parse(body);
     } catch {
-      res.writeHead(400);
-      res.end("Bad request: invalid JSON\n");
+      this.sendError(res, 400, "INVALID_REQUEST", "request body is not valid JSON",
+        "Send a JSON object with Content-Type: application/json");
       return;
     }
 
@@ -703,8 +765,7 @@ export class Daemon {
     let rootUri = projectOpts.rootUri as string | undefined;
 
     if (!projectId || !rootUri) {
-      res.writeHead(400);
-      res.end("Bad request: 'projectId' and 'rootUri' required\n");
+      this.sendError(res, 400, "INVALID_REQUEST", "both '$2' and '$3' are required");
       return;
     }
 
@@ -714,8 +775,7 @@ export class Daemon {
     try {
       statSync(dirPath);
     } catch {
-      res.writeHead(400);
-      res.end(`Bad request: directory '${dirPath}' does not exist\n`);
+      this.sendError(res, 400, "INVALID_REQUEST", `directory '${dirPath}' does not exist`);
       return;
     }
 
@@ -737,8 +797,10 @@ export class Daemon {
     try {
       this.registerProject(projectId, dirPath);
     } catch (err) {
-      res.writeHead(500);
-      res.end((err as Error).message + "\n");
+      // 500 is the only status whose message may name the internals (ADR-022 §4).
+      this.sendError(res, 500, "INTERNAL", "could not register the project",
+        "Check the daemon log; ingestion may be disabled (ingestion.workerPoolSize).");
+      console.error("[prag] registerProject failed:", err);
       return;
     }
 
@@ -755,8 +817,8 @@ export class Daemon {
    */
   private async _handleWatchUri(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (!this.db) {
-      res.writeHead(503);
-      res.end("Service not initialized\n");
+      this.sendError(res, 503, "SERVICE_UNAVAILABLE", "the index is not open",
+        "Start the daemon with `prag daemon start` and retry.");
       return;
     }
 
@@ -841,7 +903,7 @@ export class Daemon {
     try {
       this.registerProject(projectId, dirPath);
     } catch (err) {
-      this.sendError(res, 500, "INTERNAL", (err as Error).message);
+      this.sendInternal(res, "INTERNAL", "could not watch the project", err);
       return;
     }
 
@@ -925,14 +987,14 @@ export class Daemon {
         );
         return;
       }
-      this.sendError(res, 500, "SYNC_FAILED", (err as Error).message);
+      this.sendInternal(res, "SYNC_FAILED", "the sync could not be completed", err);
     }
   }
 
   private async _handleGetGrants(_req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (!this.db) {
-      res.writeHead(503);
-      res.end("Service not initialized\n");
+      this.sendError(res, 503, "SERVICE_UNAVAILABLE", "the index is not open",
+        "Start the daemon with `prag daemon start` and retry.");
       return;
     }
 
@@ -957,14 +1019,13 @@ export class Daemon {
     try {
       opts = JSON.parse(body);
     } catch {
-      res.writeHead(400);
-      res.end("Bad request: invalid JSON\n");
+      this.sendError(res, 400, "INVALID_REQUEST", "request body is not valid JSON",
+        "Send a JSON object with Content-Type: application/json");
       return;
     }
 
     if (!opts.pattern || !opts.action) {
-      res.writeHead(400);
-      res.end("Bad request: 'pattern' and 'action' required\n");
+      this.sendError(res, 400, "INVALID_REQUEST", "both '$2' and '$3' are required");
       return;
     }
 
@@ -1020,14 +1081,13 @@ export class Daemon {
     try {
       opts = JSON.parse(body);
     } catch {
-      res.writeHead(400);
-      res.end("Bad request: invalid JSON\n");
+      this.sendError(res, 400, "INVALID_REQUEST", "request body is not valid JSON",
+        "Send a JSON object with Content-Type: application/json");
       return;
     }
 
     if (!opts.uri) {
-      res.writeHead(400);
-      res.end("Bad request: 'uri' required\n");
+      this.sendError(res, 400, "INVALID_REQUEST", "'$2' is required");
       return;
     }
 
@@ -1043,14 +1103,13 @@ export class Daemon {
     try {
       opts = JSON.parse(body);
     } catch {
-      res.writeHead(400);
-      res.end("Bad request: invalid JSON\n");
+      this.sendError(res, 400, "INVALID_REQUEST", "request body is not valid JSON",
+        "Send a JSON object with Content-Type: application/json");
       return;
     }
 
     if (!opts.pattern) {
-      res.writeHead(400);
-      res.end("Bad request: 'pattern' required\n");
+      this.sendError(res, 400, "INVALID_REQUEST", "'$2' is required");
       return;
     }
 
@@ -1065,8 +1124,8 @@ export class Daemon {
 
   private async _handlePrune(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (!this.db) {
-      res.writeHead(503);
-      res.end("Service not initialized\n");
+      this.sendError(res, 503, "SERVICE_UNAVAILABLE", "the index is not open",
+        "Start the daemon with `prag daemon start` and retry.");
       return;
     }
 
@@ -1140,7 +1199,7 @@ export class Daemon {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ prunedFiles, purgedChunks, prunedBranches, gcChunks }));
     } catch (err) {
-      this.sendError(res, 500, "INTERNAL", `prune failed: ${(err as Error).message}`);
+      this.sendInternal(res, "INTERNAL", "prune failed", err);
     } finally {
       if (gcChunks && this.ingestionQueue) this.ingestionQueue.resume();
     }
@@ -1176,10 +1235,21 @@ export class Daemon {
 
   private async _handleReembed(_req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (!this.db || !this.embedder) {
-      res.writeHead(503);
-      res.end("Service not initialized or no embedder configured\n");
+      this.sendError(res, 503, "SERVICE_UNAVAILABLE",
+        "no embedding provider is available",
+      "Start the daemon with a working PRAG_EMBEDDING_MODEL, or run `prag reembed`.");
       return;
     }
+
+    // Two sweeps at once would interleave writes to vector_pool, and the second
+    // would report success over a half-rewritten index.
+    if (this._reembedding) {
+      this.sendError(res, 409, "REEMBED_IN_PROGRESS",
+        "a re-embedding sweep is already running",
+        "Wait for it to finish (`prag status` reports progress), then retry.");
+      return;
+    }
+    this._reembedding = true;
 
     let requeued = 0;
 
@@ -1187,7 +1257,7 @@ export class Daemon {
       const chunks = await this.db.table("chunks_pool")
         .query()
         .limit(10000)
-        .toArray() as Array<{ chunkHash: string; text: string }>;
+        .toArray() as Array<{ chunkHash: string; text: string; scopeContext: string | null }>;
 
       if (chunks.length === 0) {
         res.writeHead(200, { "Content-Type": "application/json" });
@@ -1195,32 +1265,94 @@ export class Daemon {
         return;
       }
 
-      // Clear existing vectors first
-      await this.db.table("vector_pool").delete("true");
+      // Units the sweep will not rewrite have to go (a chunk that now splits into
+      // fewer windows), or a query can still hit a vector from the previous model.
+      // Diffed up front and deleted only after the sweep succeeds: clearing the
+      // pool first left the index with zero vectors whenever a later batch failed.
+      const before = await this.db
+        .table("vector_pool")
+        .query()
+        .select(["chunkHash", "unitIndex"])
+        .limit(100000)
+        .toArray() as Array<{ chunkHash: string; unitIndex: number }>;
 
-      // Re-embed in batches
-      const batchSize = 50;
+
+      // Re-embed in batches. Rows are keyed by (chunkHash, unitIndex) and merged,
+      // so the sweep never empties the pool: an earlier `delete("true")` here left
+      // the index with zero vectors whenever a later batch failed.
+      const batchSize = this._options.embeddingBatchSize ?? DEFAULT_EMBEDDING_BATCH;
+      const { tokenizer, maxTokens, overlap } = this._unitSplit(this.embedder);
+      const written: Array<{ chunkHash: string; unitIndex: number }> = [];
       for (let i = 0; i < chunks.length; i += batchSize) {
         const batch = chunks.slice(i, i + batchSize);
-        const texts = batch.map((c) => c.text);
+        // One chunk is several vector units (ADR-014), so the sweep must split it
+        // exactly as ingestion does. Writing unitIndex 0 only left every re-embedded
+        // chunk searchable by its first window and silent for the rest.
+        const texts: string[] = [];
+        const rows: Array<{ chunkHash: string; unitIndex: number }> = [];
+        for (const chunk of batch) {
+          const units = splitVectorUnits(
+            chunk.text,
+            chunk.scopeContext ?? "",
+            tokenizer,
+            maxTokens,
+            overlap,
+          );
+          units.forEach((_unit, unitIndex) => {
+            texts.push(units.length === 1 ? chunk.text : units[unitIndex]!);
+            rows.push({ chunkHash: chunk.chunkHash, unitIndex });
+          });
+        }
         const vectors = await this.embedder.embedBatch(texts);
 
-        await upsertVectorPool(this.db.table("vector_pool"),
-          batch.map((c, j) => ({
-            chunkHash: c.chunkHash,
-            unitIndex: 0,
-            vector: vectors[j],
-          })),
+        await upsertVectorPool(
+          this.db.table("vector_pool"),
+          rows.map((row, j) => ({ ...row, vector: vectors[j]! })),
         );
         requeued += batch.length;
+        written.push(...rows);
+      }
+
+      const kept = new Set(written.map((r) => `${r.chunkHash}#${r.unitIndex}`));
+      const stale = before.filter((r) => !kept.has(`${r.chunkHash}#${r.unitIndex}`));
+      if (stale.length > 0) {
+        // Keyed deletes rather than delete("true"): the surviving vectors are
+        // never dropped, so the index stays searchable throughout.
+        for (const row of stale) {
+          await this.db
+            .table("vector_pool")
+            .delete(`chunkHash = '${row.chunkHash}' AND unitIndex = ${row.unitIndex}`);
+        }
       }
 
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ requeued, total: chunks.length }));
-    } catch {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ requeued: 0, total: 0 }));
+      res.end(JSON.stringify({ requeued, total: chunks.length, staleRemoved: stale.length }));
+    } catch (err) {
+      // A partial sweep must be reported: answering 200 with zeros hid the fact
+      // that the index had just been rewritten by an interrupted sweep.
+      this.sendInternal(res, "INTERNAL", "the re-embedding sweep failed", err);
+    } finally {
+      this._reembedding = false;
     }
+  }
+
+  /**
+   * How a chunk is cut into vector units. Ingestion and reembed must agree
+   * exactly, or a sweep silently changes which part of a chunk is findable.
+   */
+  private _unitSplit(embedder: EmbeddingProvider): {
+    tokenizer: Tokenizer;
+    maxTokens: number;
+    overlap: number;
+  } {
+    return {
+      tokenizer: embedder.tokenizer ?? approximateTokenizer(),
+      maxTokens:
+        this._options.maxVectorUnitTokens ??
+        Math.min(DEFAULT_MAX_VECTOR_UNIT_TOKENS, embedder.maxSeqLength),
+      overlap:
+        this._options.vectorUnitOverlapTokens ?? DEFAULT_VECTOR_UNIT_OVERLAP_TOKENS,
+    };
   }
 
   private async _handlePauseResume(req: IncomingMessage, res: ServerResponse, newStatus: string): Promise<void> {
@@ -1229,14 +1361,13 @@ export class Daemon {
     try {
       opts = JSON.parse(body);
     } catch {
-      res.writeHead(400);
-      res.end("Bad request: invalid JSON\n");
+      this.sendError(res, 400, "INVALID_REQUEST", "request body is not valid JSON",
+        "Send a JSON object with Content-Type: application/json");
       return;
     }
 
     if (!opts.projectId) {
-      res.writeHead(400);
-      res.end("Bad request: 'projectId' required\n");
+      this.sendError(res, 400, "INVALID_REQUEST", "'$2' is required");
       return;
     }
 
