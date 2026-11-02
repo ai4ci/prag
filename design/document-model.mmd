@@ -143,7 +143,14 @@ classDiagram
     %% @view issue_list
     %% SELECT uri
     %% FROM issue
+    %% WHERE status IN ('open','in_progress')
     %% ORDER BY priority DESC
+
+    %% @view resolved_issue_list
+    %% SELECT uri
+    %% FROM issue
+    %% WHERE status IN ('resolved','closed')
+    %% ORDER BY uri ASC
 
     %% @view task_list
     %% SELECT uri

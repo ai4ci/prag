@@ -56,6 +56,17 @@ _(no results)_
 - [Per-caller permission grants for search results](issues/search-result-permission-grants.md)
 <!-- loom view: issue_list end -->
 
+## Resolved issues
+
+<!-- loom view: resolved_issue_list -->
+
+- [packages/daemon has no executable entry point — lazy spawn and prag daemon start can never succeed](issues/daemon-entry-point-has-no-main.md)
+- [Ingestion writes a random fileVersionId and empty contentHash, and the upsert helpers append, so nothing is content-addressable or deduplicated](issues/file-level-cas-never-written.md)
+- [Root npm run lint cannot run — tsc --noEmit fails TS6059 rootDir for every package file](issues/root-tsconfig-breaks-typecheck.md)
+- [Unlink and prune delete chunks_pool/vector_pool rows without --gc-chunks, destroying content other projects still reference](issues/unlink-prune-deletes-shared-pool-rows.md)
+- [WorkerPool respawns twice per crash and leaves a dead worker index in the idle list, so a request can hang forever](issues/worker-pool-double-respawn.md)
+<!-- loom view: resolved_issue_list end -->
+
 ## ADR summary
 
 <!-- loom view: adr_list -->
@@ -91,15 +102,30 @@ _(no results)_
 <!-- loom view: task_list -->
 
 - [Implement branch_mapping table schema and branch pruning lifecycle](tasks/branch-mapping-and-pruning.md)
-- [Implement the unified error envelope, status mapping and exit codes](tasks/error-contract.md)
+- [Implement grants and projects tables with allow/deny evaluation and Chokidar filter integration](tasks/project-registry-and-exclusions.md)
+- [Implement daemon local loopback HTTP server and lifecycle management](tasks/daemon-http-server-and-lifecycle.md)
 - [Spike native addon support under Bun (LanceDB, ONNX, Tree-sitter)](tasks/toolchain-spike-native-addons.md)
-- [Build Tree-sitter and LiteParse parser routing in @prag/daemon](tasks/daemon-parser-router.md)
-- [Implement pinned embedding model detection and prag reembed rebuild](tasks/embedding-model-migration.md)
-- [Implement LiteParse layout-preserving PDF/DOCX to Markdown pipeline](tasks/liteparse-document-pipeline.md)
+- [Implement test harness setup/teardown with ephemeral port and no-spawn mode](tasks/test-harness-lifecycle.md)
+- [Implement injectable fake embedding provider (fake:<dim>)](tasks/deterministic-embedding-provider.md)
+- [Implement PRAG_ROOT isolation and assertable resolved paths](tasks/test-environment-isolation.md)
+- [Implement short-lived CLI client with lazy daemon spawning and HTTP queries](tasks/cli-read-only-search.md)
+- [Make POST /sync a true drain barrier](tasks/sync-drain-barrier.md)
+- [Scope search to a projectId through the daemon and hybridSearch](tasks/search-project-scoping.md)
+- [Implement hybrid search with LanceDB BM25 FTS and Reciprocal Rank Fusion](tasks/hybrid-search-rrf.md)
+- [Implement discovery filters, skip reporting and watch admission control](tasks/ingestion-limits-and-admission.md)
+- [Implement the ingestion worker pool with main-thread embedding and writes](tasks/ingestion-worker-pool.md)
+- [Implement LanceDB initialization scripts with 7-table schema setup](tasks/lancedb-init-scripts.md)
+- [Implement the unified error envelope, status mapping and exit codes](tasks/error-contract.md)
+- [Maintain the test fixture corpus and git fixture builder](tasks/test-fixture-corpus.md)
+- [Expose native HTTP/SSE Model Context Protocol (MCP) server endpoint in daemon](tasks/mcp-server-endpoint.md)
 - [Implement hardware acceleration provider selection and local-first enforcement](tasks/local-first-enforcement.md)
+- [Implement pinned embedding model detection and prag reembed rebuild](tasks/embedding-model-migration.md)
+- [Enforce project-scoped query and storage isolation across workspaces](tasks/workspace-isolation-enforcement.md)
+- [Build Tree-sitter and LiteParse parser routing in @prag/daemon](tasks/daemon-parser-router.md)
+- [Construct thread-safe background queue with Chokidar debouncing](tasks/daemon-ingestion-queue.md)
 - [Define the capability-negotiating web fetch backend interface](tasks/web-fetch-backend-interface.md)
 - [Implement the web URI ingestion pipeline on top of a fetch backend](tasks/web-ingestion-pipeline.md)
-- [Enforce project-scoped query and storage isolation across workspaces](tasks/workspace-isolation-enforcement.md)
-- [Implement the Exa web fetch backend](tasks/exa-backend.md)
+- [Implement LiteParse layout-preserving PDF/DOCX to Markdown pipeline](tasks/liteparse-document-pipeline.md)
 - [Implement the Firecrawl web fetch backend](tasks/firecrawl-backend.md)
+- [Implement the Exa web fetch backend](tasks/exa-backend.md)
 <!-- loom view: task_list end -->

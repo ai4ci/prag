@@ -146,16 +146,23 @@ Ensure zero errors reported in `design/VALIDATION.md`.
 
 ## 5. Navigational Indexes
 
-`design/INDEX.md` is the single navigation page; it embeds four inline views
-(one per class). The queries live in `design/document-model.mmd` as
-`%% @view <name>` annotations (`feature_list`, `adr_list`, `issue_list`,
-`task_list`); each section carries a marker pair like:
+`design/INDEX.md` is the single navigation page. The queries live in
+`design/document-model.mmd` as `%% @view <name>` annotations — `completed_feature_list`,
+`in_progress_feature_list`, `accepted_feature_list`, `draft_feature_list`, `adr_list`,
+`issue_list` (open + in_progress only), `resolved_issue_list`, `task_list` (everything not
+`done`); each section carries a marker pair like:
 
 ```markdown
 <!-- loom view: feature_list -->
 <!-- loom view: end -->
 ```
 
-Each view is `SELECT uri FROM <class> ORDER BY ...` — a single `uri` column
-renders as a bullet list of titled markdown links. Run `loom render` after any
-document is added, renamed or re-prioritised.
+Each view is `SELECT uri FROM <class> WHERE ... ORDER BY ...` — a single `uri` column
+renders as a bullet list of titled markdown links.
+
+**`loom render` reads the DuckDB projection, not the files.** If you edited frontmatter
+(status, priority) by hand — which `loom set` refuses to do while any cardinality error is
+outstanding — the projection is stale and render re-emits the OLD rows while reporting
+`updated: []`. Run `loom rebuild` (or `loom validate --fix`) first, then `loom render`, then
+confirm with `loom query "SELECT uri, status FROM issue"`. This silently showed resolved
+issues under "Open Issues" once.
