@@ -7,7 +7,7 @@
 import {
   createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { statSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 
 import {
@@ -186,7 +186,16 @@ export class Daemon {
     this.embedder = embedder;
     this._options = options;
     this._mismatch = options.mismatch ?? null;
-    if (db && embedder) this.mcpHandler = new McpHandler(db, embedder);
+    if (db && embedder) {
+      // Thunked through `this` so the handler reaches the daemon's own policy
+      // methods, not a copy of them.
+      this.mcpHandler = new McpHandler(db, embedder, {
+        watchUri: (o) => this.watchUri(o),
+        applyGrant: (pattern, action, reason) => this.applyGrant(pattern, action, reason),
+        prune: (gcChunks) => this.prune(gcChunks),
+        statusFor: (uri) => this.statusFor(uri),
+      });
+    }
 
     // Start ingestion pipeline if configured
     const ingConfig = this.config.ingestion;
@@ -302,11 +311,11 @@ export class Daemon {
   }
 
   /** Register a project directory for file watching. */
-  registerProject(projectId: string, dirPath: string): void {
+  registerProject(projectId: string, dirPath: string, cooldownMs?: number): void {
     if (!this.ingestionQueue) {
       throw new Error("Ingestion not enabled (set ingestion.poolSize > 0)");
     }
-    this.ingestionQueue.registerProject(projectId, dirPath);
+    this.ingestionQueue.registerProject(projectId, dirPath, cooldownMs);
   }
 
   /**
@@ -881,7 +890,7 @@ export class Daemon {
     let rootUri = projectOpts.rootUri as string | undefined;
 
     if (!projectId || !rootUri) {
-      this.sendError(res, 400, "INVALID_REQUEST", "both '$2' and '$3' are required");
+      this.sendError(res, 400, "INVALID_REQUEST", "both 'projectId' and 'rootUri' are required");
       return;
     }
 
@@ -937,12 +946,6 @@ export class Daemon {
    * all, so a refusal leaves no half-applied policy behind.
    */
   private async _handleWatchUri(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    if (!this.db) {
-      this.sendError(res, 503, "SERVICE_UNAVAILABLE", "the index is not open",
-        "Start the daemon with `prag daemon start` and retry.");
-      return;
-    }
-
     const body = await readBody(req).catch(() => null);
     let opts: { uri?: string; projectId?: string; confirm?: boolean } = {};
     if (body) {
@@ -952,29 +955,70 @@ export class Daemon {
         /* treated as a missing uri below */
       }
     }
+    let outcome: Record<string, unknown>;
+    try {
+      outcome = await this.watchUri(opts);
+    } catch (err) {
+      if (err instanceof DaemonFailure) return this.sendFailure(res, err);
+      return this.sendInternal(res, "INTERNAL", "could not watch the project", err);
+    }
+    // Written only once the operation has succeeded: answering 200 first and
+    // then failing leaves the client with a half response.
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(outcome));
+  }
+
+  /**
+   * Grant, register and watch a directory — the whole of `prag watch`, and the
+   * MCP `watch_uri` tool. Throws `DaemonFailure` rather than answering, so the
+   * HTTP route and the tool cannot drift into two different behaviours; ADR-022
+   * requires both to report the same code, and a tool that merely echoed a
+   * narrower answer would let an agent believe a refusal was a transport error.
+   */
+  async watchUri(opts: {
+    uri?: string;
+    projectId?: string;
+    confirm?: boolean;
+    cooldownSeconds?: number;
+  }): Promise<Record<string, unknown>> {
+    if (!this.db) {
+      throw new DaemonFailure(
+        "SERVICE_UNAVAILABLE",
+        "the index is not open",
+        "Start the daemon with `prag daemon start` and retry.",
+      );
+    }
+
+    if (!this.ingestionQueue) {
+      // Distinct from "the index is not open": the daemon is up and searchable,
+      // it just has no workers, so the remedy is a config change and a restart.
+      throw new DaemonFailure(
+        "SERVICE_UNAVAILABLE",
+        "ingestion is disabled on this daemon, so nothing can be watched",
+        "Set ingestion.poolSize > 0 in config.json (or PRAG_POOL_SIZE) and restart the daemon.",
+      );
+    }
 
     const rootUri = opts.uri;
     if (!rootUri) {
-      this.sendError(res, 400, "INVALID_REQUEST", "'uri' is required");
-      return;
+      throw new DaemonFailure("INVALID_REQUEST", "'uri' is required");
     }
     if (!rootUri.startsWith("file://")) {
-      this.sendError(
-        res,
-        503,
+      throw new DaemonFailure(
         "CRAWL_BACKEND_REQUIRED",
         `no web fetch backend is configured to watch ${rootUri}`,
         "Set web.backend in config.json or PRAG_WEB_BACKEND, or watch a file:// URI",
       );
-      return;
     }
 
     const dirPath = fileURLToPath(rootUri);
     try {
       statSync(dirPath);
     } catch {
-      this.sendError(res, 400, "INVALID_REQUEST", `directory '${dirPath}' does not exist`);
-      return;
+      throw new DaemonFailure(
+        "INVALID_REQUEST",
+        `directory '${dirPath}' does not exist`,
+      );
     }
 
     const dryRun = await discoveryDryRun(dirPath, await this._grantRows(), {
@@ -983,9 +1027,9 @@ export class Daemon {
     });
 
     if (dryRun.exceedsThreshold && !opts.confirm) {
-      this.sendError(
-        res,
-        409,
+      // An agent has no terminal to confirm at, so the counts go in `details`
+      // for it to put to the user (ADR-023).
+      throw new DaemonFailure(
         "WATCH_LIMIT_EXCEEDED",
         `watching ${dirPath} would register ${dryRun.projects} projects / ${dryRun.files} files`,
         "Re-send with confirm: true (CLI: --yes) to proceed",
@@ -995,7 +1039,6 @@ export class Daemon {
           threshold: dryRun.threshold ?? DEFAULT_WATCH_CONFIRM_THRESHOLD,
         },
       );
-      return;
     }
 
     await upsertGrants(this.db.table("grants"), [{
@@ -1010,33 +1053,39 @@ export class Daemon {
     // isGitWorkspace, not a statSync().isDirectory() check: a linked worktree's
     // `.git` is a file, and every worktree was being recorded as non-git.
     const isGit = isGitWorkspace(dirPath);
+    // A caller-supplied lease wins; otherwise the daemon's configured default.
+    const cooldownMs =
+      opts.cooldownSeconds !== undefined
+        ? Math.max(0, Math.round(opts.cooldownSeconds * 1000))
+        : this.config.ingestion?.cooldownMs ?? DEFAULT_COOLDOWN_MS;
     await upsertProjects(this.db.table("projects"), [{
       projectId,
       rootUri: pathToFileURL(dirPath).href,
       name: basename(dirPath),
       isGit,
-      defaultCooldownSeconds: Math.round(
-        (this.config.ingestion?.cooldownMs ?? DEFAULT_COOLDOWN_MS) / 1000,
-      ),
+      defaultCooldownSeconds: Math.round(cooldownMs / 1000),
       status: "active",
       registeredAt: new Date(),
       lastSyncedAt: null,
     }]);
 
     try {
-      this.registerProject(projectId, dirPath);
+      this.registerProject(projectId, dirPath, cooldownMs);
     } catch (err) {
-      this.sendInternal(res, "INTERNAL", "could not watch the project", err);
-      return;
+      throw new DaemonFailure(
+        "INTERNAL",
+        "could not watch the project",
+        "See the daemon log for the underlying error.",
+        { cause: err instanceof Error ? err.message : String(err) },
+      );
     }
 
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({
+    return {
       projectId,
       rootUri: pathToFileURL(dirPath).href,
       status: "active",
       discovered: { projects: dryRun.projects, files: dryRun.files, skipped: dryRun.skipped },
-    }));
+    };
   }
 
   private async _handleSync(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -1148,37 +1197,64 @@ export class Daemon {
     }
 
     if (!opts.pattern || !opts.action) {
-      this.sendError(res, 400, "INVALID_REQUEST", "both '$2' and '$3' are required");
+      this.sendError(res, 400, "INVALID_REQUEST", "both 'pattern' and 'action' are required");
       return;
     }
 
-    if (this.db) {
-      await upsertGrants(this.db.table("grants"), [{
-        pattern: opts.pattern,
-        action: opts.action as "allow" | "deny",
-        reason: opts.reason ?? "cli_grant",
-        createdAt: new Date(),
-      }]);
+    let outcome: Record<string, unknown>;
+    try {
+      outcome = await this.applyGrant(opts.pattern, opts.action, opts.reason);
+    } catch (err) {
+      if (err instanceof DaemonFailure) return this.sendFailure(res, err);
+      return this.sendInternal(res, "INTERNAL", "could not apply the grant", err);
     }
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(outcome));
+  }
+
+  /**
+   * Write a grant and do what a deny implies immediately: drop the covered files
+   * from search and stop watching a root that lies inside it. Shared with the MCP
+   * `deny_uri` tool so an agent and a human cannot get different guarantees.
+   */
+  async applyGrant(
+    pattern: string,
+    action: string,
+    reason?: string,
+  ): Promise<Record<string, unknown>> {
+    if (action !== "allow" && action !== "deny") {
+      throw new DaemonFailure(
+        "INVALID_REQUEST",
+        `action must be 'allow' or 'deny', got '${action}'`,
+      );
+    }
+    if (!this.db) {
+      throw new DaemonFailure(
+        "SERVICE_UNAVAILABLE",
+        "the index is not open",
+        "Start the daemon with `prag daemon start` and retry.",
+      );
+    }
+
+    await upsertGrants(this.db.table("grants"), [{
+      pattern,
+      action: action as "allow" | "deny",
+      reason: reason ?? "cli_grant",
+      createdAt: new Date(),
+    }]);
     // A deny must stop the next file event, not the next restart (ADR-009 §4).
     this.invalidateGrantCache();
 
     let unwatched: string | null = null;
     let purged = 0;
-    if (opts.action === "deny" && this.db) {
+    if (action === "deny") {
       // Report what is being taken out of search rather than silently dropping
       // rows; pool rows are shared and stay for --gc-chunks.
-      purged = (await this.purgeDenied(opts.pattern)).length;
-      unwatched = this._unwatchUnder(opts.pattern);
+      purged = (await this.purgeDenied(pattern)).length;
+      unwatched = this._unwatchUnder(pattern);
     }
 
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({
-      pattern: opts.pattern,
-      action: opts.action,
-      purgedFiles: purged,
-      unwatched,
-    }));
+    return { pattern, action, purgedFiles: purged, unwatched };
   }
 
   /**
@@ -1210,7 +1286,7 @@ export class Daemon {
     }
 
     if (!opts.uri) {
-      this.sendError(res, 400, "INVALID_REQUEST", "'$2' is required");
+      this.sendError(res, 400, "INVALID_REQUEST", "'uri' is required");
       return;
     }
 
@@ -1232,7 +1308,7 @@ export class Daemon {
     }
 
     if (!opts.pattern) {
-      this.sendError(res, 400, "INVALID_REQUEST", "'$2' is required");
+      this.sendError(res, 400, "INVALID_REQUEST", "'pattern' is required");
       return;
     }
 
@@ -1246,14 +1322,6 @@ export class Daemon {
   }
 
   private async _handlePrune(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    if (!this.db) {
-      this.sendError(res, 503, "SERVICE_UNAVAILABLE", "the index is not open",
-        "Start the daemon with `prag daemon start` and retry.");
-      return;
-    }
-
-    // `prag prune` only prunes the lightweight pointer tables; reclaiming pool
-    // rows is the explicit `--gc-chunks` sweep (ADR-017).
     const body = await readBody(req).catch(() => null);
     let gcChunks = false;
     if (body) {
@@ -1262,6 +1330,31 @@ export class Daemon {
       } catch {
         /* treat an unparseable body as a plain prune */
       }
+    }
+    let outcome: Record<string, unknown>;
+    try {
+      outcome = await this.prune(gcChunks);
+    } catch (err) {
+      if (err instanceof DaemonFailure) return this.sendFailure(res, err);
+      return this.sendInternal(res, "INTERNAL", "prune failed", err);
+    }
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(outcome));
+  }
+
+  /**
+   * `prag prune` and the MCP `prune_index` tool. A plain prune only prunes the
+   * lightweight pointer tables; reclaiming pool rows is the explicit opt-in sweep
+   * (ADR-017), because `chunks_pool` is content-addressed and shared with every
+   * other project and branch that ever held the same text.
+   */
+  async prune(gcChunks = false): Promise<Record<string, unknown>> {
+    if (!this.db) {
+      throw new DaemonFailure(
+        "SERVICE_UNAVAILABLE",
+        "the index is not open",
+        "Start the daemon with `prag daemon start` and retry.",
+      );
     }
 
     // Dedup is a check-then-act sequence: an ingest that reads chunks_pool and
@@ -1286,16 +1379,11 @@ export class Daemon {
         try {
           statSync(filePath);
         } catch {
-          // File doesn't exist — prune its pointer rows. Pool rows are
-          // content-addressed and shared with every other project and branch
-          // that indexed the same text (issue:unlink-prune-deletes-shared-pool-
-          // rows); the whole-pool sweep below is what reclaims them.
+          // Pool rows are content-addressed and shared, so only the pointer rows
+          // go here; the whole-pool sweep below is what reclaims them
+          // (issue:unlink-prune-deletes-shared-pool-rows).
           await this.db.table("chunk_mapping").delete(`fileVersionId = '${file.fileVersionId.replace(/'/g, "''")}'`);
           await this.db.table("file_mapping").delete(`fileVersionId = '${file.fileVersionId.replace(/'/g, "''")}'`);
-
-          // Pool rows are content-addressed and shared with every other project
-          // and branch that indexed the same text (issue:unlink-prune-deletes-
-          // shared-pool-rows); the whole-pool sweep below is what reclaims them.
           prunedFiles++;
         }
       }
@@ -1308,13 +1396,90 @@ export class Daemon {
 
       if (gcChunks) purgedChunks += await this.gcUnreferencedChunks();
 
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ prunedFiles, purgedChunks, prunedBranches, prunedVersions, gcChunks }));
-    } catch (err) {
-      this.sendInternal(res, "INTERNAL", "prune failed", err);
+      return { prunedFiles, purgedChunks, prunedBranches, prunedVersions, gcChunks };
     } finally {
       if (gcChunks && this.ingestionQueue) this.ingestionQueue.resume();
     }
+  }
+
+  /**
+   * What an agent needs to know about one workspace: is it indexed, on which
+   * branch, and how much of it is in the index. `prag status` and the MCP
+   * `get_indexing_status` tool both read this.
+   *
+   * `uri` is required for MCP callers — the in-daemon server has no working
+   * directory of its own to resolve a relative path against.
+   */
+  async statusFor(uri: string): Promise<Record<string, unknown>> {
+    if (!this.db) {
+      throw new DaemonFailure(
+        "SERVICE_UNAVAILABLE",
+        "the index is not open",
+        "Start the daemon with `prag daemon start` and retry.",
+      );
+    }
+    if (!uri) {
+      throw new DaemonFailure(
+        "INVALID_REQUEST",
+        "'uri' is required",
+        "Pass the workspace URI to inspect; the daemon has no working directory of its own.",
+      );
+    }
+
+    const rootUri = uri.startsWith("file://") ? uri : pathToFileURL(resolve(uri)).href;
+    const projects = (await this.db.table("projects").query().limit(1000).toArray()) as Array<{
+      projectId: string;
+      rootUri: string;
+      status: string;
+      isGit: boolean;
+    }>;
+    const wanted = rootUri.replace(/\/$/, "");
+    const project = projects.find(
+      (p) => String(p.rootUri).replace(/\/$/, "") === wanted,
+    );
+    if (!project) {
+      throw new DaemonFailure(
+        "PROJECT_NOT_FOUND",
+        `no registered project is rooted at ${rootUri}`,
+        "Register it with `prag watch <uri>`, or list what is known with `prag projects`.",
+      );
+    }
+
+    const root = this.ingestionQueue
+      ?.registeredRoots()
+      .find(([id]) => id === project.projectId)?.[1];
+    // Read HEAD rather than trusting projects.isGit: a worktree's `.git` is a
+    // file, and a repository created after registration would still read false.
+    const branch = root ? resolveBranch(root) : DEFAULT_BRANCH;
+
+    const files = (await this.db
+      .table("file_mapping")
+      .query()
+      .filter(`projectId = '${project.projectId.replace(/'/g, "''")}'`)
+      .limit(100000)
+      .toArray()) as Array<{ fileVersionId: string }>;
+    const versions = new Set(files.map((f) => String(f.fileVersionId)));
+    const chunkHashes = new Set<string>();
+    if (versions.size > 0) {
+      const chunks = (await this.db
+        .table("chunk_mapping")
+        .query()
+        .limit(100000)
+        .toArray()) as Array<{ fileVersionId: string; chunkHash: string }>;
+      for (const c of chunks) {
+        if (versions.has(String(c.fileVersionId))) chunkHashes.add(String(c.chunkHash));
+      }
+    }
+
+    return {
+      projectId: project.projectId,
+      rootUri: project.rootUri,
+      status: String(project.status),
+      branch,
+      indexed: { files: files.length, fileVersions: versions.size, chunks: chunkHashes.size },
+      watched: root !== undefined,
+      ingestion: this.ingestionQueue?.stats() ?? null,
+    };
   }
 
   /**
@@ -1556,7 +1721,7 @@ export class Daemon {
     }
 
     if (!opts.projectId) {
-      this.sendError(res, 400, "INVALID_REQUEST", "'$2' is required");
+      this.sendError(res, 400, "INVALID_REQUEST", "'projectId' is required");
       return;
     }
 

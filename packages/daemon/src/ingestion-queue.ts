@@ -69,6 +69,12 @@ export class IngestionQueue {
   /** Registered root per project, for the pre-drain reconciliation walk. */
   private projectDirs = new Map<string, string>();
   /**
+   * Cooldown per project, from `projects.defaultCooldownSeconds`. A repository of
+   * build artefacts wants a longer lease than a hand-edited notes directory, and
+   * `watch_uri`/`prag watch --cooldown` are the places a caller says which.
+   */
+  private projectCooldownMs = new Map<string, number>();
+  /**
    * Wall-clock of each project's last reconciliation walk. Files modified since
    * then are queued even if the watcher never reported them.
    */
@@ -118,7 +124,7 @@ export class IngestionQueue {
   }
 
   /** Register a project directory for watching. */
-  registerProject(projectId: string, dirPath: string): void {
+  registerProject(projectId: string, dirPath: string, cooldownMs?: number): void {
     const watcher = chokidar.watch(dirPath, {
       persistent: true,
       ignoreInitial: false,
@@ -160,6 +166,7 @@ export class IngestionQueue {
     this.watchers.set(projectId, watcher);
     this.skipCounters.set(projectId, {});
     this.projectDirs.set(projectId, resolve(dirPath));
+    if (cooldownMs && cooldownMs > 0) this.projectCooldownMs.set(projectId, cooldownMs);
     // Force the first drain to reconcile the whole tree.
     this.reconciledAt.set(projectId, 0);
   }
@@ -182,6 +189,7 @@ export class IngestionQueue {
     this.skipCounters.delete(projectId);
     this.readyPromises.delete(projectId);
     this.projectDirs.delete(projectId);
+    this.projectCooldownMs.delete(projectId);
     this.reconciledAt.delete(projectId);
   }
 
@@ -428,7 +436,7 @@ export class IngestionQueue {
     if (this.cooldowns.has(uri)) return;
 
     // Start cooldown timer
-    this._startCooldown(uri);
+    this._startCooldown(uri, projectId);
   }
 
   private _onUnlink(projectId: string, filePath: string): void {
@@ -471,7 +479,7 @@ export class IngestionQueue {
     }
   }
 
-  private _startCooldown(uri: string): void {
+  private _startCooldown(uri: string, projectId: string): void {
     const timer = setTimeout(() => {
       this.cooldowns.delete(uri);
 
@@ -492,7 +500,7 @@ export class IngestionQueue {
             .then((result) => this.onFileReady(result)),
         );
       });
-    }, this.config.cooldownMs);
+    }, this.projectCooldownMs.get(projectId) ?? this.config.cooldownMs);
 
     this.cooldowns.set(uri, timer);
   }
