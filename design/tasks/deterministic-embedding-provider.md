@@ -15,6 +15,10 @@ addressed-by:
   - src:core/src/embedding.ts#registerProvider
   - src:core/src/embedding.ts#getProvider
   - src:core/src/embedding.ts#parseFakeDim
+tested-by:
+  - coretest:embedding.test.ts#fakeEmbeddingProviderSuite
+  - coretest:embedding.test.ts#getProviderRegisterProviderSuite
+  - coretest:embedding.test.ts#parseFakeDimSuite
 ---
 ## Objective
 Give the embedding pipeline a seam so tests can run offline, instantly, and deterministically (ADR-019). Without it every test that indexes anything needs ~130MB of ONNX weights (ADR-006), pays model-load time, and asserts against ranking that moves between model revisions.

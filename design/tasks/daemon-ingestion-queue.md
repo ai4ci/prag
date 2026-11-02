@@ -9,9 +9,10 @@ relates-to:
 addressed-by:
   - src:daemon/src/ingestion-queue.ts#IngestionQueue
   - src:daemon/src/ingestion-queue.ts#IngestionConfig
-  - src:daemon/src/ingestion-queue.test.ts
   - src:daemon/src/ingestion-queue.ts#IngestionQueueItem
   - src:daemon/src/ingestion-queue.ts#ProjectIngestionState
+tested-by:
+  - daemontest:ingestion-queue.test.ts#ingestionQueueSuite
 ---
 ## Objective
 Construct a thread-safe background ingestion worker queue in `@prag/daemon` with filesystem event debouncing.

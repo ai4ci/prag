@@ -5,9 +5,9 @@ import {
   chunkHash,
   normalizeWhitespace,
   detectLanguageFromPath,
-} from "./chunker.js";
+} from "../src/chunker.js";
 
-void describe("detectLanguageFromPath", () => {
+function detectLanguageFromPathSuite(): void {
   void it("detects TypeScript from .ts", () => {
     assert.equal(detectLanguageFromPath("src/index.ts"), "typescript");
   });
@@ -23,9 +23,10 @@ void describe("detectLanguageFromPath", () => {
   void it("falls back to text for unknown extensions", () => {
     assert.equal(detectLanguageFromPath("Makefile"), "text");
   });
-});
+}
+void describe("detectLanguageFromPath", detectLanguageFromPathSuite);
 
-void describe("normalizeWhitespace", () => {
+function normalizeWhitespaceSuite(): void {
   void it("normalizes CRLF to LF", () => {
     assert.equal(normalizeWhitespace("a\r\nb\r\nc"), "a\nb\nc\n");
   });
@@ -37,9 +38,10 @@ void describe("normalizeWhitespace", () => {
   void it("trims trailing whitespace per line", () => {
     assert.equal(normalizeWhitespace("foo  \nbar  "), "foo\nbar\n");
   });
-});
+}
+void describe("normalizeWhitespace", normalizeWhitespaceSuite);
 
-void describe("chunkHash", () => {
+function chunkHashSuite(): void {
   void it("is deterministic", () => {
     assert.equal(chunkHash("hello world"), chunkHash("hello world"));
   });
@@ -50,9 +52,10 @@ void describe("chunkHash", () => {
       chunkHash("function foo() {\n\treturn 1;\n}"),
     );
   });
-});
+}
+void describe("chunkHash", chunkHashSuite);
 
-void describe("chunkFile", () => {
+function chunkFileSuite(): void {
   void it("produces scope context for a TypeScript file", () => {
     const content =
       'import { foo } from "./bar";\n' +
@@ -119,4 +122,5 @@ void describe("chunkFile", () => {
     const result = chunkFile("empty.ts", "");
     assert.equal(result.chunks.length, 0);
   });
-});
+}
+void describe("chunkFile", chunkFileSuite);

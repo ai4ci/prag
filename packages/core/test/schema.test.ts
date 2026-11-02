@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { evaluateUriGrants, type GrantRow } from "./schema.js";
+import { evaluateUriGrants, type GrantRow } from "../src/schema.js";
 
 function allow(pattern: string, reason: GrantRow["reason"] = "explicit_grant"): GrantRow {
   return { pattern, action: "allow", reason, createdAt: new Date() };
@@ -9,7 +9,7 @@ function deny(pattern: string, reason: GrantRow["reason"] = "user_deny"): GrantR
   return { pattern, action: "deny", reason, createdAt: new Date() };
 }
 
-void describe("evaluateUriGrants", () => {
+function evaluateUriGrantsSuite(): void {
   void it("denies by default when no grants exist", () => {
     const result = evaluateUriGrants("file:///home/user/secret.txt", []);
     assert.equal(result.matched, false);
@@ -75,4 +75,5 @@ void describe("evaluateUriGrants", () => {
     assert.equal(result.matched, true);
     assert.equal(result.action, "deny");
   });
-});
+}
+void describe("evaluateUriGrants", evaluateUriGrantsSuite);

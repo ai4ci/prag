@@ -11,11 +11,11 @@ import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
-import { WorkerPool, type ProcessResult } from "./worker-pool.js";
-import { IngestionQueue } from "./ingestion-queue.js";
+import { WorkerPool, type ProcessResult } from "../src/worker-pool.js";
+import { IngestionQueue } from "../src/ingestion-queue.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const WORKER_SCRIPT = join(__dirname, "ingestion-worker.ts");
+const WORKER_SCRIPT = join(__dirname, "../src/ingestion-worker.ts");
 
 // ── Fixture: each test gets a self-contained pool+queue+tmpdir ───────
 
@@ -58,7 +58,7 @@ function setup(cooldownMs = 100): TestCtx {
 
 // ── Tests ────────────────────────────────────────────────────────────
 
-void describe("IngestionQueue", () => {
+function ingestionQueueSuite(): void {
   void it("discovers existing files on register", async () => {
     const { tmpDir, ingested, queue } = setup();
 
@@ -199,4 +199,5 @@ void describe("IngestionQueue", () => {
     const counters = queue.getSkipCounters("skip-test");
     assert.equal(counters.binary, 1);
   });
-});
+}
+void describe("IngestionQueue", ingestionQueueSuite);

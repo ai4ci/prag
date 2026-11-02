@@ -9,6 +9,9 @@ relates-to:
 addressed-by:
   - src:daemon/src/test-harness.ts
   - src:daemon/src/test-harness.ts#buildFixtures
+tested-by:
+  - daemontest:ingestion-e2e.test.ts#daemonWithIngestionSuite
+  - clitest:e2e.test.ts#cLIEndToEndSuite
 ---
 ## Objective
 Keep `test/fixtures/` a complete and honest set of inputs: every documented ingestion behaviour has a fixture that exercises it, and every fixture's invariant is checked rather than assumed.

@@ -9,6 +9,8 @@ relates-to:
 addressed-by:
   - src:daemon/src/ingestion-queue.ts#IngestionQueue
   - src:daemon/src/ingestion-queue.ts#IngestionConfig
+tested-by:
+  - daemontest:ingestion-queue.test.ts#ingestionQueueSuite
 ---
 ## Objective
 Implement ADR-023 so a single `prag watch ~/Git` cannot silently commit the machine to hours of indexing, and so anything excluded is visibly excluded.

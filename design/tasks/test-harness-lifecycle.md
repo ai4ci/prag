@@ -10,6 +10,8 @@ addressed-by:
   - src:daemon/src/test-harness.ts#startTestDaemon
   - src:daemon/src/test-harness.ts#stopTestDaemon
   - src:daemon/src/test-harness.ts#TestDaemonInstance
+tested-by:
+  - daemontest:test-harness.test.ts#testHarnessSuite
 ---
 ## Objective
 Provide the shared setup/teardown harness every test suite uses, plus the two daemon-lifecycle controls it depends on (ADR-019).

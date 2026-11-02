@@ -8,9 +8,9 @@ import {
   LanceDbSchema,
   FakeEmbeddingProvider,
 } from "@prag/core";
-import { Daemon } from "./daemon.js";
+import { Daemon } from "../src/daemon.js";
 
-void describe("Daemon", () => {
+function daemonSuite(): void {
   let tmpDir: string;
   let schema: LanceDbSchema;
   let daemon: Daemon;
@@ -108,4 +108,5 @@ void describe("Daemon", () => {
     });
     assert.equal(res.status, 404);
   });
-});
+}
+void describe("Daemon", daemonSuite);

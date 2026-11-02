@@ -12,8 +12,6 @@ addressed-by:
   - src:core/src/schema.ts#evaluateUriGrants
   - src:core/src/schema.ts#SearchQueryOptions
   - src:core/src/schema.ts#GrantRow
-  - src:core/src/schema.test.ts
-  - src:core/src/database.test.ts
   - src:core/src/database.ts#LanceDbSchema
   - src:core/src/schema.ts#ProjectRow
   - src:core/src/schema.ts#BranchMappingRow
@@ -24,6 +22,11 @@ addressed-by:
   - src:core/src/schema.ts#SearchHit
   - src:core/src/schema.ts#GrantEvaluation
   - src:core/src/schema.ts#uriMatch
+tested-by:
+  - coretest:database.test.ts#lanceDbSchemaSuite
+  - coretest:database.test.ts#vectorPoolSchemaSuite
+  - coretest:database.test.ts#aPIVERSIONSuite
+  - coretest:schema.test.ts#evaluateUriGrantsSuite
 ---
 ## Objective
 Define the shared TypeScript database schemas, table models, and interfaces in `@prag/core` matching the 7-table storage specification.

@@ -4,10 +4,10 @@ import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 
 import { startTestDaemon, stopTestDaemon } from "@prag/daemon";
-import { DaemonClient } from "./daemon-client.js";
+import { DaemonClient } from "../src/daemon-client.js";
 import type { TestDaemonInstance } from "@prag/daemon";
 
-void describe("DaemonClient", () => {
+function daemonClientSuite(): void {
   let inst: TestDaemonInstance;
   let client: DaemonClient;
 
@@ -142,4 +142,5 @@ void describe("DaemonClient", () => {
       await stopTestDaemon(pInst);
     }
   });
-});
+}
+void describe("DaemonClient", daemonClientSuite);

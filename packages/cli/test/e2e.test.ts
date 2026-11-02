@@ -5,10 +5,10 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { startTestDaemon, stopTestDaemon, buildFixtures } from "@prag/daemon";
-import { runCLI } from "./test-runner.js";
+import { runCLI } from "../src/test-runner.js";
 import type { TestDaemonInstance } from "@prag/daemon";
 
-describe("CLI end-to-end", () => {
+function cLIEndToEndSuite(): void {
   let inst: TestDaemonInstance;
   let env: Record<string, string>;
 
@@ -73,4 +73,5 @@ describe("CLI end-to-end", () => {
     const { exitCode } = await runCLI(["grants", "evaluate", "/home/some/file.ts"], env);
     assert.equal(exitCode, 0, `exit ${exitCode}`);
   });
-});
+}
+void describe("CLI end-to-end", cLIEndToEndSuite);

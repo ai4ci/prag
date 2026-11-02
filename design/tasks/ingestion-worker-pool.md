@@ -13,7 +13,8 @@ addressed-by:
   - src:daemon/src/worker-pool.ts#ProcessResult
   - src:daemon/src/ingestion-worker.ts#WorkerInput
   - src:daemon/src/ingestion-worker.ts#WorkerOutput
-  - src:daemon/src/worker-pool.test.ts
+tested-by:
+  - daemontest:worker-pool.test.ts#workerPoolSuite
 ---
 ## Objective
 Implement the concurrency split of ADR-021 so synchronous parsing cannot stall the `/search` request path.

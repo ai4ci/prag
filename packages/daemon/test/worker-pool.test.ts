@@ -6,12 +6,12 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
 
-import { WorkerPool } from "./worker-pool.js";
+import { WorkerPool } from "../src/worker-pool.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const WORKER_SCRIPT = join(__dirname, "ingestion-worker.ts");
+const WORKER_SCRIPT = join(__dirname, "../src/ingestion-worker.ts");
 
-void describe("WorkerPool", () => {
+function workerPoolSuite(): void {
   let pool: WorkerPool | undefined;
 
   afterEach(async () => {
@@ -125,4 +125,5 @@ void describe("WorkerPool", () => {
 
     rmSync(tmpDir, { recursive: true, force: true });
   });
-});
+}
+void describe("WorkerPool", workerPoolSuite);

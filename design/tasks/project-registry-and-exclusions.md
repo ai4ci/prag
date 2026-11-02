@@ -13,6 +13,9 @@ addressed-by:
   - src:core/src/schema.ts#uriMatch
   - src:core/src/schema.ts#GrantEvaluation
   - src:daemon/src/ingestion-queue.ts#IngestionQueue.registerProject
+tested-by:
+  - coretest:schema.test.ts#evaluateUriGrantsSuite
+  - clitest:e2e.test.ts#cLIEndToEndSuite
 ---
 ## Description
 Implement the `grants` and `projects` tables in LanceDB, along with allow/deny evaluation and Chokidar watcher filter integration.

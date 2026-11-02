@@ -3,11 +3,11 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { LanceDbSchema, API_VERSION, ALL_TABLES } from "./database.js";
-import { type VectorPoolRow } from "./schema.js";
+import { LanceDbSchema, API_VERSION, ALL_TABLES } from "../src/database.js";
+import { type VectorPoolRow } from "../src/schema.js";
 
 // Tests against a real LanceDB instance in a temp dir
-void describe("LanceDbSchema", () => {
+function lanceDbSchemaSuite(): void {
   let tmpDir: string;
   let db: LanceDbSchema;
 
@@ -96,9 +96,10 @@ void describe("LanceDbSchema", () => {
       rmSync(customDir, { recursive: true, force: true });
     }
   });
-});
+}
+void describe("LanceDbSchema", lanceDbSchemaSuite);
 
-void describe("vectorPool schema", () => {
+function vectorPoolSchemaSuite(): void {
   void it("accepts Float32Array as vector type", () => {
     const row: VectorPoolRow = {
       chunkHash: "abc123",
@@ -109,11 +110,13 @@ void describe("vectorPool schema", () => {
     assert.equal(row.unitIndex, 0);
     assert.equal(row.vector.length, 3);
   });
-});
+}
+void describe("vectorPool schema", vectorPoolSchemaSuite);
 
-void describe("API_VERSION", () => {
+function aPIVERSIONSuite(): void {
   void it("is a positive integer", () => {
     assert.ok(Number.isInteger(API_VERSION));
     assert.ok(API_VERSION > 0);
   });
-});
+}
+void describe("API_VERSION", aPIVERSIONSuite);

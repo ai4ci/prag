@@ -31,6 +31,32 @@ rejected with `model/path-removed`). URIs are **curies** — `feature:x.md`, not
 - **Source code anchors**: `src:<relpath>#<symbol>` -> `packages/<relpath>`
   - The `packages/` prefix is *dropped* in the curie: `src:core/src/schema.ts#initDatabase` is `packages/core/src/schema.ts`.
 - **Resources**: `resource:<relpath>` -> `design/resources/<relpath>` (e.g. schemas, diagrams)
+- **Tests**: `test` is an abstract `src` subclass with one concrete scheme per package:
+  - `coretest:<file>#<suite>` -> `packages/core/test/<file>`
+  - `daemontest:<file>#<suite>` -> `packages/daemon/test/<file>`
+  - `clitest:<file>#<suite>` -> `packages/cli/test/<file>`
+  - Tests live in `packages/<pkg>/test/`, **not** colocated with source: loom
+    class schemes are directories, so a colocated test cannot be distinguished
+    from its `src` sibling (`path/collision`).
+  - Each `void describe(...)` block is a **named** suite function so it is an
+    anchorable symbol (`function daemonSuite(): void { ... }` followed by
+    `void describe("Daemon", daemonSuite);`). Anonymous arrow callbacks carry no
+    anchor and cannot be linked.
+
+### Every task must be tested
+
+`task "0..*" --> "1..*" test : tested-by` — a task with no covering test suite
+is a hard `instance/cardinality` error from `loom validate`. Link at suite
+granularity:
+
+```bash
+loom link task:hybrid-search-rrf.md tested-by "coretest:search.test.ts#searchSuite"
+```
+
+The edge direction is **task -> test** on purpose. The reverse (`test -> task`)
+would have to be stored as a reverse-link comment in the test file, and loom
+canonicalises that comment's host back to `src:packages/...` (doubled prefix,
+wrong scheme), which then fails with `source/invalid-reverse-relation`.
 
 ## 2. Common Operations
 

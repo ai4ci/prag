@@ -7,9 +7,9 @@ import { tmpdir } from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { LanceDbSchema, FakeEmbeddingProvider } from "@prag/core";
-import { Daemon } from "./daemon.js";
+import { Daemon } from "../src/daemon.js";
 
-void describe("Daemon with ingestion", () => {
+function daemonWithIngestionSuite(): void {
   const ctx: {
     tmpDir: string;
     projectDir: string;
@@ -98,4 +98,5 @@ void describe("Daemon with ingestion", () => {
       `hello.ts not in results: ${uris.join(", ")}`,
     );
   });
-});
+}
+void describe("Daemon with ingestion", daemonWithIngestionSuite);

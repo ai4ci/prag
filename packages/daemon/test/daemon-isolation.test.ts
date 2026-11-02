@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { LanceDbSchema, FakeEmbeddingProvider } from "@prag/core";
-import { Daemon } from "./daemon.js";
+import { Daemon } from "../src/daemon.js";
 
 // Save original PRAG_* vars
 const OENV: Record<string, string | undefined> = {};
@@ -33,7 +33,7 @@ afterEach(() => {
   }
 });
 
-void describe("Daemon PRAG_ROOT isolation", () => {
+function daemonPRAGROOTIsolationSuite(): void {
   let port = 19900;
 
   void it("health reports PRAG_ROOT paths", async () => {
@@ -103,4 +103,5 @@ void describe("Daemon PRAG_ROOT isolation", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
-});
+}
+void describe("Daemon PRAG_ROOT isolation", daemonPRAGROOTIsolationSuite);

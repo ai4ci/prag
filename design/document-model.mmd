@@ -3,6 +3,9 @@
 %% @prefix issue: <repo:design/issues/> .
 %% @prefix adr: <repo:design/adrs/> .
 %% @prefix src: <repo:packages/> .
+%% @prefix coretest: <repo:packages/core/test/> .
+%% @prefix daemontest: <repo:packages/daemon/test/> .
+%% @prefix clitest: <repo:packages/cli/test/> .
 %% @prefix resource: <repo:design/resources/> .
 
 classDiagram
@@ -86,6 +89,25 @@ classDiagram
     issue "0..*" --> "0..1" feature : relates-to
     issue "0..*" --> "0..*" task : blocks
     adr "0..*" --> "0..*" adr : supersedes
+
+    %% test: abstract source family for test files (per-package subclasses below)
+    class test {
+        <<abstract>>
+    }
+    class coretest
+    class daemontest
+    class clitest
+
+    %% Every task must name at least one test function that covers it.
+    %% Direction is task -> test so the edge lives in task frontmatter:
+    %% loom's reverse-link comments canonicalise a test anchor back to the
+    %% `src` scheme, which rejects a test-family relation.
+    task "0..*" --> "1..*" test : tested-by
+
+    src <|-- test
+    test <|-- coretest
+    test <|-- daemontest
+    test <|-- clitest
 
     %% @view feature_list
     %% SELECT uri

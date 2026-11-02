@@ -6,6 +6,8 @@ status: in_progress
 priority: medium
 relates-to:
   - feature:background-worker-queue.md
+tested-by:
+  - daemontest:daemon.test.ts#daemonSuite
 ---
 ## Objective
 Implement the pinned-embedding-model detection and explicit rebuild workflow described in ADR-015.

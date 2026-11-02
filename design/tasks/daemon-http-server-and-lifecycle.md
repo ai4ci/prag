@@ -10,8 +10,10 @@ addressed-by:
   - src:daemon/src/daemon.ts#Daemon
   - src:daemon/src/daemon.ts#DaemonConfig
   - src:daemon/src/daemon.ts#loadConfig
-  - src:daemon/src/ingestion-e2e.test.ts
   - src:daemon/src/daemon.ts#readBody
+tested-by:
+  - daemontest:daemon.test.ts#daemonSuite
+  - daemontest:ingestion-e2e.test.ts#daemonWithIngestionSuite
 ---
 ## Description
 Implement the HTTP server inside @prag/daemon binding strictly to loopback 127.0.0.1.

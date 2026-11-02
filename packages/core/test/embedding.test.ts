@@ -5,9 +5,9 @@ import {
   getProvider,
   registerProvider,
   parseFakeDim,
-} from "./embedding.js";
+} from "../src/embedding.js";
 
-void describe("FakeEmbeddingProvider", () => {
+function fakeEmbeddingProviderSuite(): void {
   void it("produces deterministic vectors for the same text", async () => {
     const p = new FakeEmbeddingProvider(384);
     const a = await p.embed("hello world");
@@ -56,9 +56,10 @@ void describe("FakeEmbeddingProvider", () => {
     assert.ok(p.maxSeqLength > 0);
     assert.equal(p.maxSeqLength, 512);
   });
-});
+}
+void describe("FakeEmbeddingProvider", fakeEmbeddingProviderSuite);
 
-void describe("getProvider / registerProvider", () => {
+function getProviderRegisterProviderSuite(): void {
   void it("returns a FakeEmbeddingProvider for fake:384", () => {
     const p = getProvider("fake:384");
     assert.ok(p instanceof FakeEmbeddingProvider);
@@ -84,13 +85,15 @@ void describe("getProvider / registerProvider", () => {
     assert.ok(p instanceof FakeEmbeddingProvider);
     assert.equal(p.model, "fake:64");
   });
-});
+}
+void describe("getProvider / registerProvider", getProviderRegisterProviderSuite);
 
-void describe("parseFakeDim", () => {
+function parseFakeDimSuite(): void {
   void it("parses fake:384", () => assert.equal(parseFakeDim("fake:384"), 384));
   void it("parses fake_768", () => assert.equal(parseFakeDim("fake_768"), 768));
   void it("throws for invalid format", () => {
     assert.throws(() => parseFakeDim("fake"), /Invalid fake model/);
     assert.throws(() => parseFakeDim("real:384"), /Invalid fake model/);
   });
-});
+}
+void describe("parseFakeDim", parseFakeDimSuite);

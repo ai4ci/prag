@@ -9,6 +9,9 @@ relates-to:
 addressed-by:
   - src:cli/src/daemon-client.ts#DaemonClient
   - src:cli/src/main.ts#main
+tested-by:
+  - clitest:daemon-client.test.ts#daemonClientSuite
+  - clitest:e2e.test.ts#cLIEndToEndSuite
 ---
 ## Description
 Implement the short-lived CLI client (@prag/cli) for querying the index and managing the daemon.

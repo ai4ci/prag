@@ -15,6 +15,9 @@ addressed-by:
   - src:core/src/paths.ts#PragPaths
   - src:core/src/paths.ts#PragConfig
   - src:core/src/paths.ts#loadPragConfig
+tested-by:
+  - coretest:paths.test.ts#resolvePragPathsSuite
+  - daemontest:daemon-isolation.test.ts#daemonPRAGROOTIsolationSuite
 ---
 ## Objective
 Make it possible to run `prag` fully isolated from the developer's own installation with one variable, and make that isolation assertable before anything destructive runs (ADR-019).

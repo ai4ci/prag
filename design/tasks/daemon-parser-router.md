@@ -9,6 +9,11 @@ relates-to:
 addressed-by:
   - src:core/src/chunker.ts#chunkFile
   - src:core/src/chunker.ts#detectLanguageFromPath
+tested-by:
+  - coretest:chunker.test.ts#detectLanguageFromPathSuite
+  - coretest:chunker.test.ts#chunkFileSuite
+  - coretest:chunker.test.ts#normalizeWhitespaceSuite
+  - coretest:chunker.test.ts#chunkHashSuite
 ---
 ## Description
 Implement the parser router in @prag/daemon dispatching code files to Tree-sitter and documents to LiteParse.

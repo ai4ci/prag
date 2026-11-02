@@ -2,7 +2,7 @@ import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { resolvePragPaths } from "./paths.js";
+import { resolvePragPaths } from "../src/paths.js";
 
 // Save originals to restore
 const OENV = { ...process.env };
@@ -35,7 +35,7 @@ afterEach(() => {
   }
 });
 
-void describe("resolvePragPaths", () => {
+function resolvePragPathsSuite(): void {
   const xdgData = join(homedir(), ".local", "share", "prag");
   const xdgConfig = join(homedir(), ".config", "prag");
   const xdgState = join(homedir(), ".local", "state", "prag");
@@ -112,4 +112,5 @@ void describe("resolvePragPaths", () => {
     assert.equal(p.logDir, "/l");
     assert.equal(p.root, "/root");
   });
-});
+}
+void describe("resolvePragPaths", resolvePragPathsSuite);

@@ -7,7 +7,7 @@
     "prag": "./src/main.ts"
   },
   "scripts": {
-    "test": "tsx --test src/*.test.ts"
+    "test": "tsx --test 'test/*.test.ts'"
   },
   "dependencies": {
     "@prag/daemon": "*",

@@ -21,6 +21,9 @@ addressed-by:
   - src:core/src/database.ts#upsertChunkMapping
   - src:core/src/database.ts#upsertChunksPool
   - src:core/src/database.ts#upsertVectorPool
+tested-by:
+  - coretest:database.test.ts#lanceDbSchemaSuite
+  - coretest:database.test.ts#vectorPoolSchemaSuite
 ---
 ## Objective
 Implement initialization scripts and table bootstrap utilities for LanceDB in `@prag/core`.

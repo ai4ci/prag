@@ -6,6 +6,8 @@ status: in_progress
 priority: high
 relates-to:
   - feature:git-branch-awareness.md
+tested-by:
+  - daemontest:daemon.test.ts#daemonSuite
 ---
 ## Description
 Implement the 4th table in the LanceDB schema: `branch_mapping`.

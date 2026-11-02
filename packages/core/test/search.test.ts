@@ -6,12 +6,12 @@ import { tmpdir } from "node:os";
 
 import lancedb, { Index } from "@lancedb/lancedb";
 import { Table, Schema, Field, Utf8, Int32, Float32, FixedSizeList } from "apache-arrow";
-import { FakeEmbeddingProvider } from "./embedding.js";
+import { FakeEmbeddingProvider } from "../src/embedding.js";
 
 // We import the search module dynamically to avoid type issues
-const { hybridSearch, fuseResults } = await import("./search.js") as any;
+const { hybridSearch, fuseResults } = await import("../src/search.js") as any;
 
-void describe("search", () => {
+function searchSuite(): void {
   let tmpDir: string;
   let db: any;
   let chunksTable: any;
@@ -138,4 +138,5 @@ void describe("search", () => {
     assert.ok(result.totalChunks >= 0);
     assert.equal(result.query, "hello");
   });
-});
+}
+void describe("search", searchSuite);

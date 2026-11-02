@@ -18,6 +18,8 @@ addressed-by:
   - src:cli/src/daemon-client.ts#SearchOptions
   - src:cli/src/daemon-client.ts#SearchHit
   - src:cli/src/daemon-client.ts#SearchResult
+tested-by:
+  - coretest:search.test.ts#searchSuite
 ---
 ## Description
 Implement hybrid search in @prag/daemon combining dense vector embeddings and BM25 full-text search.

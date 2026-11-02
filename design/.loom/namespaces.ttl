@@ -8,3 +8,6 @@
 @prefix task: <repo:design/tasks/> .
 @prefix issue: <repo:design/issues/> .
 @prefix adr: <repo:design/adrs/> .
+@prefix coretest: <repo:packages/core/test/> .
+@prefix daemontest: <repo:packages/daemon/test/> .
+@prefix clitest: <repo:packages/cli/test/> .

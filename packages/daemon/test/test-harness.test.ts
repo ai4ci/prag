@@ -5,9 +5,9 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { startTestDaemon, stopTestDaemon, buildFixtures } from "./test-harness.js";
+import { startTestDaemon, stopTestDaemon, buildFixtures } from "../src/test-harness.js";
 
-void describe("Test harness", () => {
+function testHarnessSuite(): void {
   void it("starts and stops a daemon with PRAG_ROOT isolation", async () => {
     const inst = await startTestDaemon();
 
@@ -107,4 +107,5 @@ void describe("Test harness", () => {
 
     rmSync(root, { recursive: true, force: true });
   });
-});
+}
+void describe("Test harness", testHarnessSuite);

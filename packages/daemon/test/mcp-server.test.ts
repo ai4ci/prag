@@ -5,9 +5,9 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { LanceDbSchema, FakeEmbeddingProvider } from "@prag/core";
-import { Daemon } from "./daemon.js";
+import { Daemon } from "../src/daemon.js";
 
-void describe("MCP server", () => {
+function mCPServerSuite(): void {
   let tmpDir: string;
   let schema: LanceDbSchema;
   let daemon: Daemon;
@@ -90,4 +90,5 @@ void describe("MCP server", () => {
     });
     assert.equal(res.status, 404);
   });
-});
+}
+void describe("MCP server", mCPServerSuite);
