@@ -10,6 +10,7 @@ addressed-by:
   - src:daemon/src/test-harness.ts
   - src:daemon/src/test-harness.ts#buildFixtures
 tested-by:
+  - coretest:fixtures.test.ts#fixtureInvariantSuite
   - daemontest:ingestion-e2e.test.ts#daemonWithIngestionSuite
   - clitest:e2e.test.ts#cLIEndToEndSuite
 ---
@@ -35,30 +36,32 @@ The corpus and the builder script exist (`test/fixtures/`, see its `README.md` f
 
 ## Implementation status
 
-Reverted from `done`: the builder and all four invariants are written and correct, but
-nothing executes them, so the invariants are currently decorative.
+In progress on purpose. The wiring and the invariants are done; the task's own first line —
+"every documented ingestion behaviour has a fixture that exercises it" — is not satisfied while
+PDF/DOCX and web fixtures have no ingestion path to exercise them.
 
-- **"run in CI" — MISSING.** No `.github/` exists in the repo (sandbox-protected; see
-  the CI todo), `grep -rn check-invariants package.json packages/*/package.json` → 0
-  matches, and no `*.test.ts` imports or spawns `test/fixtures/check-invariants.ts`
-  (`grep -rn check-invariants packages/` → 0). Its only reference is its own docstring.
-  A one-sided edit to `shared.ts` therefore breaks no build.
-- **Large-file invariant is an estimate.** `test/fixtures/check-invariants.ts:64-66`
-  approximates tokens as `ceil(len/4)` rather than tokenising, and never asserts the
-  "single function" property the requirement names.
-- **Documented-but-unconsumed fixtures.** `test/fixtures/README.md:23-25` lists
-  `documents/sample.pdf`, `documents/sample.docx` and `web/firecrawl-stub.json`, and the
-  files exist, but `check-invariants.ts:136-141` checks only `sample.md`; nothing
-  validates PDF/DOCX extraction parity or the stub's fields, and no ingestion code reads
-  any of them (`grep -rn firecrawl packages/*/src` → 0).
+- **"run in CI" — done, and CI is no longer the blocker.** `packages/core/test/fixtures.test.ts`
+  spawns `test/fixtures/check-invariants.ts` as part of `npm test`, so a one-sided edit to
+  `shared.ts` fails the build. Verified by breaking it: appending a line to
+  `corpus/beta/src/shared.ts` produced `✖ cross-project dedup: shared.ts byte-identical`.
+  Running it under `npm test` rather than only in CI is the point — the invariants are now
+  enforced on every run whether or not a workflow file exists.
+- **Large-file invariant — done.** `check-invariants.ts` used `ceil(len/4)`; it now counts with
+  `approximateTokenizer()`, the same tokenizer the daemon uses for window sizing
+  (`packages/daemon/src/daemon.ts:1704`), and asserts `large.ts` is **one** `function`, so more
+  than one stored row can only come from unit splitting and not from chunking.
+- **Fixture presence and shape — done.** The README's per-fixture promises are now asserted:
+  `guide.md` has two heading levels, a bullet list, a fence and a table; `stats.R` contains
+  roxygen `#'`; `web/firecrawl-stub.json` has `url`/`markdown`/`html` strings and
+  `metadata.{title,description,statusCode}`.
 
-Satisfied: builder invoked from the harness inside the test root, idempotent, pinned
-identity/dates (`packages/daemon/src/test-harness.ts:27-40`,
-`test/fixtures/build-git-fixtures.mjs:16-24,99-101`); git fixtures built not committed
-(`git ls-files test/fixtures | grep -c '\.git/'` → 0); all four invariant assertions
-written (`check-invariants.ts:36-105`), including the two-build SHA equality that
-Verification #3 asks for.
+Still open, and not fixable here (so the status stays `in_progress`):
 
-Remaining: wire `check-invariants.ts` into `npm test` (a test that spawns it is enough
-until CI exists), tokenise the `large.ts` check, and either consume the PDF/DOCX/web
-fixtures or drop them from the README table.
+- **PDF/DOCX extraction parity** needs `task:liteparse-document-pipeline.md`; the files are
+  present and their presence is now asserted, but nothing extracts them.
+- **The web stub is unconsumed** until ADR-024's fetch backend exists. Its field contract is
+  pinned now so the ingestion task cannot quietly redefine it.
+
+`check-invariants.ts` cannot carry a loom link: `test/fixtures/` is outside the `src` path
+annotation (`design/document-model.mmd` maps `src` to `/packages`), so the links above point at
+the harness that builds the fixtures and the suite that checks them.

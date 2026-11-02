@@ -15,7 +15,9 @@ import { strict as assert } from "node:assert";
 const FIXTURES = import.meta.dirname!;
 const CORPUS = join(FIXTURES, "corpus");
 
-const MAX_VECTOR_UNIT_TOKENS = 400; // default from lancedb config
+// The same tokenizer the daemon falls back to for window sizing, so this check
+// measures the property the suite relies on instead of a chars/4 guess.
+import { approximateTokenizer, DEFAULT_MAX_VECTOR_UNIT_TOKENS } from "../../packages/core/src/vector-units.js";
 
 interface Failure {
   name: string;
@@ -59,16 +61,20 @@ check("reformat: only whitespace differs", () => {
   );
 });
 
-// ── 3. large.ts exceeds maxVectorUnitTokens ──────────────────────────
+// ── 3. large.ts exceeds maxVectorUnitTokens ─────────────────────────
 
 check("large.ts exceeds maxVectorUnitTokens", () => {
   const content = readFileSync(join(CORPUS, "alpha/src/large.ts"), "utf-8");
-  // Rough token estimate: ~4 chars per token for English+code
-  const estimatedTokens = Math.ceil(content.length / 4);
+  const tokens = approximateTokenizer().countTokens(content);
   assert.ok(
-    estimatedTokens > MAX_VECTOR_UNIT_TOKENS,
-    `large.ts (~${estimatedTokens} estimated tokens) must exceed ${MAX_VECTOR_UNIT_TOKENS} tokens ` +
-    `(currently ${content.length} chars, ~${estimatedTokens} tokens)`,
+    tokens > DEFAULT_MAX_VECTOR_UNIT_TOKENS,
+    `large.ts is ${tokens} tokens; must exceed ${DEFAULT_MAX_VECTOR_UNIT_TOKENS} to exercise unit splitting`,
+  );
+  // One structural unit, so more than one stored row can only come from splitting.
+  assert.equal(
+    (content.match(/^(export )?(async )?function /gm) ?? []).length,
+    1,
+    "large.ts must stay a single function",
   );
 });
 
