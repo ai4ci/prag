@@ -61,6 +61,17 @@ export interface DryRunResult {
   files: number;
   /** Direct child git repositories — each becomes its own project (ADR-009). */
   projects: number;
+  /**
+   * Absolute path of every git repository found, the root first when it is one
+   * (ADR-009 §3). `projects` is the count a confirmation prompt shows; this is
+   * what the caller registers, so a child repo becomes its own `projects` row
+   * rather than being swallowed into its parent's.
+   *
+   * A plain directory with no repository under it yields an empty list: the
+   * root is still a project, but it is not a repository and the caller already
+   * knows its path.
+   */
+  repos: string[];
   skipped: Partial<Record<SkipReason, number>>;
   /** First 20 inclusions, so a confirmation prompt can show what is being accepted. */
   sample: string[];
@@ -113,6 +124,7 @@ export async function discoveryDryRun(
   const result: DryRunResult = {
     files: 0,
     projects: 0,
+    repos: [],
     skipped: {},
     sample: [],
     exceedsThreshold: false,
@@ -146,10 +158,14 @@ export async function discoveryDryRun(
     for (const entry of entries) {
       const full = join(dir, entry.name);
 
-      // A `.git/` directory marks an autonomous project boundary (ADR-009 §3).
-      if (entry.isDirectory() && entry.name === ".git") {
+      // A `.git` entry marks an autonomous project boundary (ADR-009 §3). It is
+      // tested without isDirectory(): in a linked worktree `.git` is a *file*
+      // holding a gitdir pointer, and requiring a directory silently treated
+      // every worktree as part of its parent.
+      if (entry.name === ".git") {
         if (dir === rootPath) rootIsRepo = true;
         else result.projects++;
+        result.repos.push(dir);
         continue;
       }
 
@@ -174,6 +190,9 @@ export async function discoveryDryRun(
   // The root is a project in its own right (repo or plain directory); child
   // repos found underneath are additional projects (ADR-009 §3).
   if (rootIsRepo || result.projects === 0) result.projects += 1;
+  // Root first: the caller registers it as the parent and excludes the rest
+  // from its watcher, so the order is part of the contract rather than cosmetic.
+  result.repos.sort((a, b) => (a === rootPath ? -1 : b === rootPath ? 1 : a.localeCompare(b)));
   result.exceedsThreshold =
     result.projects > threshold.projects || result.files > threshold.files;
   return result;

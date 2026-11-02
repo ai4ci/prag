@@ -8,7 +8,7 @@
 import chokidar from "chokidar";
 import type { FSWatcher } from "chokidar";
 import { open, readdir, stat, type FileHandle } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { join, resolve, sep } from "node:path";
 import { isBuiltinIgnored, isDenied, DEFAULT_MAX_FILE_BYTES, type GrantRow } from "@prag/core";
 import { WorkerPool } from "./worker-pool.js";
 import { type ProcessResult } from "./worker-pool.js";
@@ -75,6 +75,12 @@ export class IngestionQueue {
    */
   private projectCooldownMs = new Map<string, number>();
   /**
+   * Subtrees a project's watcher must not claim, because another project owns
+   * them (ADR-009 §3: a child git repository is its own project). Without this
+   * the parent and the child both ingest the same file, under two projectIds.
+   */
+  private projectExcludes = new Map<string, string[]>();
+  /**
    * Wall-clock of each project's last reconciliation walk. Files modified since
    * then are queued even if the watcher never reported them.
    */
@@ -124,7 +130,12 @@ export class IngestionQueue {
   }
 
   /** Register a project directory for watching. */
-  registerProject(projectId: string, dirPath: string, cooldownMs?: number): void {
+  registerProject(
+    projectId: string,
+    dirPath: string,
+    cooldownMs?: number,
+    excludeSubtrees: string[] = [],
+  ): void {
     const watcher = chokidar.watch(dirPath, {
       persistent: true,
       ignoreInitial: false,
@@ -141,13 +152,13 @@ export class IngestionQueue {
     watcher.on("ready", settleReady);
 
     watcher.on("add", (filePath) => {
-      if (!this._shouldIgnore(filePath)) {
+      if (!this._shouldIgnore(filePath, projectId)) {
         this._onEvent(projectId, filePath, "add");
       }
     });
 
     watcher.on("change", (filePath) => {
-      if (!this._shouldIgnore(filePath)) {
+      if (!this._shouldIgnore(filePath, projectId)) {
         this._onEvent(projectId, filePath, "change");
       }
     });
@@ -166,6 +177,9 @@ export class IngestionQueue {
     this.watchers.set(projectId, watcher);
     this.skipCounters.set(projectId, {});
     this.projectDirs.set(projectId, resolve(dirPath));
+    if (excludeSubtrees.length > 0) {
+      this.projectExcludes.set(projectId, excludeSubtrees.map((d) => resolve(d)));
+    }
     if (cooldownMs && cooldownMs > 0) this.projectCooldownMs.set(projectId, cooldownMs);
     // Force the first drain to reconcile the whole tree.
     this.reconciledAt.set(projectId, 0);
@@ -190,6 +204,7 @@ export class IngestionQueue {
     this.readyPromises.delete(projectId);
     this.projectDirs.delete(projectId);
     this.projectCooldownMs.delete(projectId);
+    this.projectExcludes.delete(projectId);
     this.reconciledAt.delete(projectId);
   }
 
@@ -288,10 +303,17 @@ export class IngestionQueue {
 
   // ── Internal ──────────────────────────────────────────────────────
 
-  private _shouldIgnore(filePath: string): boolean {
+  private _shouldIgnore(filePath: string, projectId?: string): boolean {
     // Same predicate the discovery dry run uses (ADR-023), so the counts a user
     // confirms before `watch` match what the watcher then indexes.
-    return isBuiltinIgnored(filePath);
+    if (isBuiltinIgnored(filePath)) return true;
+    if (!projectId) return false;
+    // A nested repository belongs to its own project, so the parent's watcher
+    // steps over it rather than indexing the same file twice under two ids.
+    const excludes = this.projectExcludes.get(projectId);
+    if (!excludes) return false;
+    const resolved = resolve(filePath);
+    return excludes.some((dir) => resolved === dir || resolved.startsWith(dir + sep));
   }
 
   /**
@@ -623,10 +645,15 @@ export class IngestionQueue {
         for (const entry of entries) {
           const full = join(current, entry.name);
           if (entry.isDirectory()) {
-            if (!this._shouldIgnore(full)) stack.push(full);
+            // `id`, not a bare path test: this walk runs per project, and a
+            // subtree owned by a nested project must not be descended into on
+            // its parent's behalf (ADR-009 §3). Omitting it here let the
+            // reconcile path re-add every child repository's file to the
+            // parent, bypassing the watcher's exclusion entirely.
+            if (!this._shouldIgnore(full, id)) stack.push(full);
             continue;
           }
-          if (!entry.isFile() || this._shouldIgnore(full)) continue;
+          if (!entry.isFile() || this._shouldIgnore(full, id)) continue;
           try {
             const info = await stat(full);
             // mtime, not content hash: hashing the tree per drain is worse, and a

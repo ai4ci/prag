@@ -50,6 +50,7 @@ _(no results)_
 
 <!-- loom view: issue_list -->
 
+- [IngestionQueue.dirty is keyed by uri alone, so two projects watching one file race for ownership](issues/ingestion-dirty-set-keyed-by-uri-alone.md)
 - [LanceDB schema evolution relies on drop-and-reindex](issues/lancedb-schema-migration-strategy.md)
 - [No installation instructions or installable artifact](issues/no-installation-instructions.md)
 - [No budget or alert for chunks_pool disk usage growth](issues/chunk-pool-disk-usage-growth.md)
@@ -103,7 +104,6 @@ _(no results)_
 <!-- loom view: task_list -->
 
 - [Implement the ingestion worker pool with main-thread embedding and writes](tasks/ingestion-worker-pool.md)
-- [Implement grants and projects tables with allow/deny evaluation and Chokidar filter integration](tasks/project-registry-and-exclusions.md)
 - [Maintain the test fixture corpus and git fixture builder](tasks/test-fixture-corpus.md)
 - [Implement test harness setup/teardown with ephemeral port and no-spawn mode](tasks/test-harness-lifecycle.md)
 - [Spike native addon support under Bun (LanceDB, ONNX, Tree-sitter)](tasks/toolchain-spike-native-addons.md)

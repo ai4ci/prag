@@ -7,7 +7,7 @@
 import {
   createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { readFileSync, statSync, existsSync } from "node:fs";
-import { basename, join, resolve } from "node:path";
+import { basename, join, resolve, sep } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 
 import {
@@ -357,11 +357,16 @@ export class Daemon {
   }
 
   /** Register a project directory for file watching. */
-  registerProject(projectId: string, dirPath: string, cooldownMs?: number): void {
+  registerProject(
+    projectId: string,
+    dirPath: string,
+    cooldownMs?: number,
+    excludeSubtrees: string[] = [],
+  ): void {
     if (!this.ingestionQueue) {
       throw new Error("Ingestion not enabled (set ingestion.poolSize > 0)");
     }
-    this.ingestionQueue.registerProject(projectId, dirPath, cooldownMs);
+    this.ingestionQueue.registerProject(projectId, dirPath, cooldownMs, excludeSubtrees);
   }
 
   /**
@@ -1095,40 +1100,70 @@ export class Daemon {
     this.invalidateGrantCache();
 
     const projectId = opts.projectId ?? dirPath;
-    // isGitWorkspace, not a statSync().isDirectory() check: a linked worktree's
-    // `.git` is a file, and every worktree was being recorded as non-git.
-    const isGit = isGitWorkspace(dirPath);
     // A caller-supplied lease wins; otherwise the daemon's configured default.
     const cooldownMs =
       opts.cooldownSeconds !== undefined
         ? Math.max(0, Math.round(opts.cooldownSeconds * 1000))
         : this.config.ingestion?.cooldownMs ?? DEFAULT_COOLDOWN_MS;
-    await upsertProjects(this.db.table("projects"), [{
-      projectId,
-      rootUri: pathToFileURL(dirPath).href,
-      name: basename(dirPath),
-      isGit,
+
+    // ADR-009 §3: a git repository under the watched root is an autonomous
+    // project, not part of its parent. Discovery used to count them and throw
+    // the paths away, so one row covered the whole tree and per-repository
+    // scoping did not exist. Each gets its own row and its own watcher, and the
+    // parent's watcher steps over them so a file is never ingested twice.
+    const resolvedRoot = resolve(dirPath);
+    const childRepos = dryRun.repos.filter((r) => resolve(r) !== resolvedRoot);
+
+    const registrations: Array<{ projectId: string; dirPath: string; excludes: string[] }> = [
+      { projectId, dirPath, excludes: childRepos },
+      ...childRepos.map((repo) => ({
+        // The caller's projectId names the root only; a child repo is a
+        // different project and must not inherit an id that already exists.
+        projectId: repo,
+        dirPath: repo,
+        // Repos nested inside this one are its children, not the root's.
+        excludes: childRepos.filter((o) => o !== repo && resolve(o).startsWith(resolve(repo) + sep)),
+      })),
+    ];
+
+    await upsertProjects(this.db.table("projects"), registrations.map((r) => ({
+      projectId: r.projectId,
+      rootUri: pathToFileURL(r.dirPath).href,
+      name: basename(r.dirPath),
+      // isGitWorkspace, not a statSync().isDirectory() check: a linked worktree's
+      // `.git` is a file, and every worktree was being recorded as non-git.
+      isGit: isGitWorkspace(r.dirPath),
       defaultCooldownSeconds: Math.round(cooldownMs / 1000),
       status: "active",
       registeredAt: new Date(),
       lastSyncedAt: null,
-    }]);
+    })));
 
-    try {
-      this.registerProject(projectId, dirPath, cooldownMs);
-    } catch (err) {
-      throw new DaemonFailure(
-        "INTERNAL",
-        "could not watch the project",
-        "See the daemon log for the underlying error.",
-        { cause: err instanceof Error ? err.message : String(err) },
-      );
+    const registered: string[] = [];
+    for (const r of registrations) {
+      try {
+        this.registerProject(r.projectId, r.dirPath, cooldownMs, r.excludes);
+        registered.push(r.projectId);
+      } catch (err) {
+        // Unwind: a half-watched tree would report success while indexing an
+        // arbitrary subset of the repositories the user just granted.
+        for (const done of registered) this.ingestionQueue?.unregisterProject(done);
+        throw new DaemonFailure(
+          "INTERNAL",
+          "could not watch the project",
+          "See the daemon log for the underlying error.",
+          { cause: err instanceof Error ? err.message : String(err) },
+        );
+      }
     }
 
     return {
       projectId,
       rootUri: pathToFileURL(dirPath).href,
       status: "active",
+      // Every id the call created, so a caller can scope a search to a child
+      // repository without first listing the registry.
+      registered,
       discovered: { projects: dryRun.projects, files: dryRun.files, skipped: dryRun.skipped },
     };
   }

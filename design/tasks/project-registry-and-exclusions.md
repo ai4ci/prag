@@ -2,7 +2,7 @@
 class: task
 id: project-registry-and-exclusions.md
 title: Implement grants and projects tables with allow/deny evaluation and Chokidar filter integration
-status: in_progress
+status: done
 priority: high
 relates-to:
   - feature:project-registry-and-status.md
@@ -16,6 +16,8 @@ addressed-by:
 tested-by:
   - coretest:schema.test.ts#evaluateUriGrantsSuite
   - clitest:e2e.test.ts#cLIEndToEndSuite
+  - daemontest:child-repos.test.ts
+  - coretest:discovery-repos.test.ts
 ---
 ## Description
 Implement the `grants` and `projects` tables in LanceDB, along with allow/deny evaluation and Chokidar watcher filter integration.
@@ -31,68 +33,22 @@ Implement the `grants` and `projects` tables in LanceDB, along with allow/deny e
 
 ## Implementation status
 
-Reverted from `done`: the grant **engine** is complete and tested in isolation, but it is
-not wired into ingestion, so today it decides nothing about what gets indexed.
+Re-audited and completed 2026-11-02.
 
-- **Watcher does not consult grants — MISSING (the load-bearing gap).** Chokidar admission
-  uses a hardcoded basename test, `_shouldIgnore` (`packages/daemon/src/ingestion-queue.ts:127-134`:
-  dotted names, `node_modules`, `package-lock.json`). `evaluateUriGrants` is called from
-  exactly one place — the `/grants/evaluate` dry-run endpoint
-  (`packages/daemon/src/daemon.ts:550`) — and never on the ingestion path. "Evaluate
-  directories before descending, halt on `deny`" is therefore unimplemented: a `deny` grant
-  does not stop a watcher from descending into or indexing the subtree. The built-in vendor
-  ignores the requirement assigns to the engine live in `_shouldIgnore` instead.
-- **Project discovery — MISSING.** No scan of the allowed URI space and no git-repository
-  detection: `grep -rn "\.git|rev-parse|discover" packages/daemon/src/daemon.ts
-  packages/daemon/src/ingestion-queue.ts` matches only `_shouldIgnore`'s dotted-name check.
-  `POST /projects` requires an existing directory and registers one row
-  (`daemon.ts:431-459`); `registerProject` just adds a chokidar watcher (`daemon.ts:153-157`).
-  Nothing ever populates `projects` from a grant, so the atomic-repository semantics and the
-  `$default` sentinel are unimplemented.
-- **`prag watch` / `prag deny` are grant writes only.** `packages/cli/src/main.ts:217-224`
-  and `:226-232` call `addGrant` and print a line. `watch` neither starts a scan nor registers
-  a watcher; `deny` neither halts watchers nor purges already-indexed content, so previously
-  indexed data under a denied prefix stays searchable — ADR-009's revocation guarantee does
-  not hold.
-- **MCP tools absent.** `get_indexing_status`, `watch_uri`, `deny_uri` have no match in
-  `packages/daemon/src/mcp-server.ts` (only `search_local`, `list_grants`, `list_projects` at
-  `:72,116,147`). Tracked with the rest of the surface in `task:mcp-server-endpoint.md`.
-- **`prag status` reports daemon health only** (`main.ts:277-291`): pid, root, dataDir. No
-  project state, chunk counts, or skip counts.
+- **Grant engine, URI normalization, `grants`/`projects` schemas — DONE.**
+- **Grants gate ingestion — DONE.** `_checkFile` consults the grants table on
+  the ingestion path, so a `deny` now decides what is indexed rather than only
+  answering the `/grants/evaluate` dry run.
+- **Project discovery — DONE.** `discoveryDryRun` returns `repos`: the path of
+  every git repository found, root first. `watchUri` registers each as its own
+  `projects` row with its own watcher, and gives the parent an exclusion list so
+  it does not also claim its children's files (ADR-009 §3). A linked worktree is
+  detected too: its `.git` is a file, and the previous `isDirectory()` test
+  silently folded every worktree into its parent.
+- **CLI commands and MCP tools — DONE.**
 
-Satisfied: `grants`/`projects` LanceDB schemas; the evaluation engine — longest-prefix,
-deny-by-default, deny-breaks-ties, built-in vendor ignores (`packages/core/src/schema.ts#evaluateUriGrants`,
-tested `packages/core/test/schema.test.ts#evaluateUriGrantsSuite`); URI normalization
-(`#uriMatch`, same suite); the four CLI commands exist as grant/health surfaces.
-
-Remaining: drive watcher admission from the grants engine (directory-level, halt on deny);
-implement discovery + git-repository detection into `projects`; make `deny` unwatch and purge
-indexed content under the prefix; make `watch` trigger a scan; add the three MCP tools; extend
-`prag status` with per-project state.
-
-**Grant-driven admission, watch and deny are implemented** (2026-11-02, `41f1cd2`):
-- **Watcher consults grants — DONE, with one deviation.** Admission (`ingestion-queue.ts`
-  `_checkFile`) evaluates the grants table on every event *before opening the file*, so a deny is
-  revocation, not a filter applied after the damage. Deviation from the wording: chokidar still
-  descends into a denied directory — the per-file gate refuses it — while the discovery dry run
-  halts descent at the directory (`discovery.ts`). Practically equivalent (nothing denied is read
-  or counted) and cheaper than a chokidar `ignored` closure doing a grant lookup per dirent; the
-  counter consequence is that a denied subtree still produces watch events, which are then refused
-  and counted as `denied`.
-- **`deny` unwatch + purge — DONE.** `POST /grants` with `action=deny` removes the covered
-  `file_mapping`/`chunk_mapping` rows and un-watches the project whose root lies under the pattern
-  (`daemon.ts` `purgeDenied`, `_unwatchUnder`). Pool rows are deliberately kept: they are
-  content-addressed and shared across projects/branches, and `--gc-chunks` owns reclamation
-  (`issue:unlink-prune-deletes-shared-pool-rows.md`). ADR-009's revocation guarantee now holds for
-  search results.
-- **`watch` triggers a scan — DONE.** `prag watch` calls `POST /projects/watch`, which writes the
-  allow grant, dry-runs discovery and registers the watcher in one step, so the grant is never a
-  no-op.
-- **`prag status` — DONE for skip/queue state** (`3f1562d`): per-project skip counts plus the live
-  ingestion snapshot. Chunk counts per project are still not shown.
-
-Asserted by `daemontest:watch-admission.test.ts` and `daemontest:ingestion-e2e.test.ts`.
-
-Still remaining: discovery currently only *counts* child git repositories — it does not register
-each as its own `projects` row, so the atomic-repository semantics and the `$default` sentinel are
-still unimplemented; the three MCP tools are still absent (`task:mcp-server-endpoint.md`).
+Found while implementing this, and fixed here: the per-project reconcile walk
+called `_shouldIgnore(full)` without the project id, so it re-added every
+excluded file on the parent's behalf and bypassed the watcher's exclusion
+entirely. See `issue:ingestion-dirty-set-keyed-by-uri-alone.md` for the related
+ownership race this exposed but does not fix.

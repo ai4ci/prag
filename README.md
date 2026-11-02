@@ -87,7 +87,7 @@ The bearer token comes from `PRAG_API_KEY`; unset, it defaults to `guest` and pr
 ### Verify your install
 
 ```bash
-npm test        # 88 core + 103 daemon + 33 cli, ~20s
+npm test        # 92 core + 105 daemon + 33 cli, ~20s
 npm run lint
 ```
 
@@ -122,9 +122,6 @@ npm run lint
 
 Design requirements not yet implemented:
 
-- [ ] Child git repositories are counted by discovery but not registered as their own `projects`
-      rows, so per-repository scoping and the `$default` sentinel are unimplemented
-      (`task:project-registry-and-exclusions.md`).
 - [ ] LiteParse PDF/DOCX layout extraction; unsupported documents are refused by extension today.
 - [ ] Web ingestion: the pluggable fetch-backend interface (ADR-024) and its `plain-fetcher` /
       Firecrawl / Exa backends.
