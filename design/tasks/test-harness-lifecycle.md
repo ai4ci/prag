@@ -2,7 +2,7 @@
 class: task
 id: test-harness-lifecycle.md
 title: Implement test harness setup/teardown with ephemeral port and no-spawn mode
-status: todo
+status: done
 priority: high
 relates-to:
   - feature:test-harness-and-fixtures.md

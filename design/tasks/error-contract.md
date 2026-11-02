@@ -2,7 +2,7 @@
 class: task
 id: error-contract.md
 title: Implement the unified error envelope, status mapping and exit codes
-status: todo
+status: in_progress
 priority: high
 relates-to:
   - feature:dual-interfaces.md

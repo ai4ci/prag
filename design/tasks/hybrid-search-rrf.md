@@ -2,7 +2,7 @@
 class: task
 id: hybrid-search-rrf.md
 title: Implement hybrid search with LanceDB BM25 FTS and Reciprocal Rank Fusion
-status: todo
+status: done
 priority: high
 relates-to:
   - feature:dual-interfaces.md

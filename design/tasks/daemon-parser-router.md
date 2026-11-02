@@ -2,7 +2,7 @@
 class: task
 id: daemon-parser-router.md
 title: Build Tree-sitter and LiteParse parser routing in @prag/daemon
-status: todo
+status: in_progress
 priority: medium
 relates-to:
   - feature:syntax-aware-chunking.md

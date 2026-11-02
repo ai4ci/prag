@@ -2,7 +2,7 @@
 class: task
 id: lancedb-init-scripts.md
 title: Implement LanceDB initialization scripts with 7-table schema setup
-status: todo
+status: done
 priority: high
 relates-to:
   - feature:git-branch-awareness.md

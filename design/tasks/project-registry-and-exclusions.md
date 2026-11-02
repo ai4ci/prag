@@ -2,10 +2,17 @@
 class: task
 id: project-registry-and-exclusions.md
 title: Implement grants and projects tables with allow/deny evaluation and Chokidar filter integration
-status: todo
+status: done
 priority: high
 relates-to:
   - feature:project-registry-and-status.md
+addressed-by:
+  - src:core/src/schema.ts#evaluateUriGrants
+  - src:core/src/schema.ts#GrantRow
+  - src:core/src/schema.ts#ProjectRow
+  - src:core/src/schema.ts#uriMatch
+  - src:core/src/schema.ts#GrantEvaluation
+  - src:daemon/src/ingestion-queue.ts#IngestionQueue.registerProject
 ---
 ## Description
 Implement the `grants` and `projects` tables in LanceDB, along with allow/deny evaluation and Chokidar watcher filter integration.

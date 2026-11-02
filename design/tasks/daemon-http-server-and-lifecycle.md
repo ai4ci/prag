@@ -2,7 +2,7 @@
 class: task
 id: daemon-http-server-and-lifecycle.md
 title: Implement daemon local loopback HTTP server and lifecycle management
-status: todo
+status: done
 priority: high
 relates-to:
   - feature:background-worker-queue.md

@@ -2,7 +2,7 @@
 class: task
 id: deterministic-embedding-provider.md
 title: Implement injectable fake embedding provider (fake:<dim>)
-status: todo
+status: done
 priority: high
 relates-to:
   - feature:test-harness-and-fixtures.md

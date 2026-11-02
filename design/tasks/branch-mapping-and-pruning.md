@@ -2,7 +2,7 @@
 class: task
 id: branch-mapping-and-pruning.md
 title: Implement branch_mapping table schema and branch pruning lifecycle
-status: todo
+status: in_progress
 priority: high
 relates-to:
   - feature:git-branch-awareness.md

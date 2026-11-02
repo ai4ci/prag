@@ -2,7 +2,7 @@
 class: task
 id: sync-drain-barrier.md
 title: Make POST /sync a true drain barrier
-status: todo
+status: done
 priority: high
 relates-to:
   - feature:test-harness-and-fixtures.md

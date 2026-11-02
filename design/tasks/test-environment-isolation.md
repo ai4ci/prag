@@ -2,7 +2,7 @@
 class: task
 id: test-environment-isolation.md
 title: Implement PRAG_ROOT isolation and assertable resolved paths
-status: todo
+status: done
 priority: high
 relates-to:
   - feature:test-harness-and-fixtures.md

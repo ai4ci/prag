@@ -2,7 +2,7 @@
 class: task
 id: cli-read-only-search.md
 title: Implement short-lived CLI client with lazy daemon spawning and HTTP queries
-status: todo
+status: done
 priority: high
 relates-to:
   - feature:dual-interfaces.md

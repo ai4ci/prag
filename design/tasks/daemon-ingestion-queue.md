@@ -2,7 +2,7 @@
 class: task
 id: daemon-ingestion-queue.md
 title: Construct thread-safe background queue with Chokidar debouncing
-status: todo
+status: done
 priority: medium
 relates-to:
   - feature:background-worker-queue.md

@@ -2,7 +2,7 @@
 class: task
 id: mcp-server-endpoint.md
 title: Expose native HTTP/SSE Model Context Protocol (MCP) server endpoint in daemon
-status: todo
+status: done
 priority: medium
 relates-to:
   - feature:dual-interfaces.md

@@ -2,7 +2,7 @@
 class: task
 id: embedding-model-migration.md
 title: Implement pinned embedding model detection and prag reembed rebuild
-status: todo
+status: in_progress
 priority: medium
 relates-to:
   - feature:background-worker-queue.md

@@ -2,7 +2,7 @@
 class: task
 id: ingestion-worker-pool.md
 title: Implement the ingestion worker pool with main-thread embedding and writes
-status: todo
+status: done
 priority: high
 relates-to:
   - feature:background-worker-queue.md

@@ -2,7 +2,7 @@
 class: task
 id: core-database-schemas.md
 title: Define LanceDB database schemas and interfaces in @prag/core
-status: todo
+status: done
 priority: high
 relates-to:
   - feature:git-branch-awareness.md

@@ -38,18 +38,26 @@ prag/
 
 ## 🚦 Roadmap & Work in Progress
 
-### Phase 1: Storage & Shared Core (Current WIP)
-- [ ] Define shared TypeScript database model definitions (`@prag/core`).
-- [ ] Implement LanceDB initialization scripts for the 7-table schema (`grants`, `projects`, `branch_mapping`, `file_mapping`, `chunk_mapping`, `chunks_pool`, `vector_pool`).
+### Phase 1: Storage & Shared Core — complete
+- [x] Define shared TypeScript database model definitions (`@prag/core`).
+- [x] Implement LanceDB initialization scripts for the 7-table schema (`grants`, `projects`, `branch_mapping`, `file_mapping`, `chunk_mapping`, `chunks_pool`, `vector_pool`).
 
-### Phase 2: Ingestion & Parser Daemon
-- [ ] Integrate `tree-sitter-language-pack` for multi-language syntax chunking (TypeScript, Python, R).
+### Phase 2: Ingestion & Parser Daemon (Current WIP)
+- [x] Integrate `tree-sitter-language-pack` for multi-language syntax chunking (TypeScript, Python, R).
 - [ ] Integrate `@llamaindex/liteparse` for layout-aware offline PDF and Word processing.
-- [ ] Construct the thread-safe background queue with `chokidar` filesystem event debouncing.
+- [x] Construct the thread-safe background queue with `chokidar` filesystem event debouncing.
 
 ### Phase 3: Consumer Interfaces
-- [ ] Build the short-lived CLI client with native git branch detection (`@prag/cli`).
-- [ ] Expose the native HTTP/SSE Model Context Protocol (MCP) server endpoint at `/mcp` directly inside `@prag/daemon` (see ADR-011).
+- [x] Build the short-lived CLI client (`@prag/cli`).
+- [ ] Add native git branch detection to the CLI and scope search by branch.
+- [x] Expose the native HTTP/SSE Model Context Protocol (MCP) server endpoint at `/mcp` directly inside `@prag/daemon` (see ADR-011).
+
+### Known gaps
+- [ ] Scope search by `projectId` — `hybridSearch()` currently spans every indexed project.
+- [ ] Emit the unified error envelope from the daemon (ADR-022); only the CLI half exists.
+- [ ] Pinned embedding-model detection on `prag reembed` (ADR-015).
+- [ ] Firecrawl web ingestion, hardware-acceleration provider selection, Bun native-addon spike.
+- [ ] CI workflow at `.github/workflows/ci.yaml` (sandbox-protected; must be added on the host).
 
 ---
 

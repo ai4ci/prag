@@ -2,7 +2,7 @@
 class: task
 id: ingestion-limits-and-admission.md
 title: Implement discovery filters, skip reporting and watch admission control
-status: todo
+status: done
 priority: high
 relates-to:
   - feature:project-registry-and-status.md

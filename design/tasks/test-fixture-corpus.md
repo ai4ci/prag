@@ -2,7 +2,7 @@
 class: task
 id: test-fixture-corpus.md
 title: Maintain the test fixture corpus and git fixture builder
-status: todo
+status: done
 priority: high
 relates-to:
   - feature:test-harness-and-fixtures.md
