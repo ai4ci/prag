@@ -111,14 +111,16 @@ function daemonClientSuite(): void {
   });
 
   void it("pause sets project to paused status", async () => {
-    const pInst = await startTestDaemon();
+    // in-process: this test writes to the daemon's LanceDB table directly, which
+    // is only reachable when the daemon shares this process.
+    const pInst = await startTestDaemon({ mode: "in-process" });
     try {
       const c = new DaemonClient(pInst.baseUrl, pInst.token);
       const projectId = "test-project-1";
 
       // Insert a project directly into the DB (ingestion not enabled in test harness)
       const { upsertProjects } = await import("@prag/core");
-      const projectsTbl = pInst.schema.table("projects");
+      const projectsTbl = pInst.schema!.table("projects");
       await upsertProjects(projectsTbl, [{
         projectId,
         rootUri: "file:///tmp/test-pause-proj",

@@ -1,7 +1,7 @@
 // @prag/daemon — Test harness tests (ADR-019)
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -66,11 +66,13 @@ function testHarnessSuite(): void {
   });
 
   void it("cleans up on stop even after daemon crash", async () => {
-    const inst = await startTestDaemon();
+    // in-process: the crash is simulated by stopping the Daemon object, which
+    // only exists in this mode. The spawn equivalent is covered below.
+    const inst = await startTestDaemon({ mode: "in-process" });
     const root = inst.root;
 
     // Force-stop the daemon internally (simulate crash)
-    await inst.daemon.stop();
+    await inst.daemon!.stop();
 
     // stopTestDaemon should still clean up root
     await stopTestDaemon(inst);
@@ -130,6 +132,47 @@ function testHarnessSuite(): void {
     } finally {
       await stopTestDaemon(inst);
     }
+  });
+
+
+  void it("spawn mode runs a real child process on an ephemeral port", async () => {
+    const inst = await startTestDaemon({ mode: "spawn" });
+    try {
+      assert.equal(inst.mode, "spawn");
+      assert.ok(inst.child, "spawn mode must expose the managed child");
+      assert.ok(inst.child!.pid && inst.child!.pid !== process.pid,
+        "the daemon is not in a separate process");
+      // PRAG_PORT=0 must yield a kernel-assigned port, not the fixed default.
+      // `Number(process.env.PRAG_PORT) || DEFAULT_PORT` silently discarded the
+      // zero, so every spawned daemon took 7724 and two could not coexist.
+      assert.notEqual(inst.port, 7724, "PRAG_PORT=0 fell back to the fixed default");
+      assert.ok(inst.port > 0);
+
+      // The port is published where a client is documented to look (ADR-016).
+      const published = readFileSync(join(inst.root, "state", "daemon.port"), "utf-8").trim();
+      assert.equal(Number(published), inst.port);
+
+      // The child is reported by the daemon itself, not by the harness.
+      const health = await (await fetch(`${inst.baseUrl}/health`)).json() as
+        { pid: number; root: string };
+      assert.equal(health.pid, inst.child!.pid);
+      assert.equal(health.root, inst.root);
+    } finally {
+      await stopTestDaemon(inst);
+    }
+  });
+
+  void it("spawn teardown leaves no process and no directory behind", async () => {
+    const inst = await startTestDaemon({ mode: "spawn" });
+    const { root } = inst;
+    const pid = inst.child!.pid!;
+
+    await stopTestDaemon(inst);
+
+    assert.equal(existsSync(root), false, "the temp root survived teardown");
+    // signal 0 probes liveness without sending anything.
+    assert.throws(() => process.kill(pid, 0), /ESRCH/,
+      "the daemon process outlived its test");
   });
 
   void it("builds git fixtures into root", async () => {

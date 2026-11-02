@@ -106,7 +106,6 @@ _(no results)_
 
 - [Implement the ingestion worker pool with main-thread embedding and writes](tasks/ingestion-worker-pool.md)
 - [Maintain the test fixture corpus and git fixture builder](tasks/test-fixture-corpus.md)
-- [Implement test harness setup/teardown with ephemeral port and no-spawn mode](tasks/test-harness-lifecycle.md)
 - [Spike native addon support under Bun (LanceDB, ONNX, Tree-sitter)](tasks/toolchain-spike-native-addons.md)
 - [Construct thread-safe background queue with Chokidar debouncing](tasks/daemon-ingestion-queue.md)
 - [Build Tree-sitter and LiteParse parser routing in @prag/daemon](tasks/daemon-parser-router.md)

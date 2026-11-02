@@ -2,7 +2,7 @@
 class: task
 id: test-harness-lifecycle.md
 title: Implement test harness setup/teardown with ephemeral port and no-spawn mode
-status: in_progress
+status: done
 priority: high
 relates-to:
   - feature:test-harness-and-fixtures.md
@@ -33,48 +33,47 @@ Provide the shared setup/teardown harness every test suite uses, plus the two da
 
 ## Implementation status
 
-Still `in_progress`. Updated 2026-11-02.
+Complete as of 2026-11-02.
 
-- **`daemon.port` file — DONE.** Written by `writeRuntimeFiles()`
-  (`daemon/src/main.ts:275`); the CLI reads the port with the documented
-  precedence (`PRAG_PORT` -> `server.port` -> 7724).
-- **`PRAG_NO_SPAWN` — DONE.** Honoured by the CLI and exercised against a real
-  spawned daemon in `clitest:subprocess-e2e.test.ts`.
-- **Readiness poll — DONE.** `startTestDaemon` polls `GET /health` until the
-  daemon answers `ok`, with a bounded timeout whose failure names the last
-  response. A test's first request is no longer a race.
+- **`PRAG_PORT=0` — DONE.** It had never worked: `loadConfig` used
+  `Number(process.env.PRAG_PORT) || config.server?.port || DEFAULT_PORT`, and
+  `0` is falsy, so every daemon silently took the fixed 7724 and two could not
+  run at once. Now `readIntEnv("PRAG_PORT") ?? ...`, the helper that already
+  existed beside it for exactly this distinction.
+- **`daemon.port` — DONE.** Written by `writeRuntimeFiles()`; the harness reads
+  the bound port from it rather than guessing, which is the documented client
+  path (ADR-016).
+- **`PRAG_NO_SPAWN` — DONE.** Honoured by the CLI, set for the spawned child,
+  and exercised in `clitest:subprocess-e2e.test.ts`.
+- **Managed child with piped stdio — DONE.** `spawn` is the harness default: a
+  non-detached child started exactly as `prag daemon start` starts one, with
+  stdout and stderr captured so a boot failure appears in the test output
+  instead of as a timeout. An earlier note here claimed this was blocked by the
+  sandbox's subprocess networking isolation. That was wrong — spawning works
+  there; the real blocker was the `PRAG_PORT=0` bug above, which made every
+  concurrent spawn collide on 7724.
+- **`in-process` mode — DONE, opt-in.** Still available per call
+  (`startTestDaemon({ mode: "in-process" })`) and for a whole run via
+  `PRAG_TEST_MODE=in-process`. Two tests need it because they hold the `Daemon`
+  or `LanceDbSchema` object directly; those fields are now optional on
+  `TestDaemonInstance`, so reaching for them without asking for the mode is a
+  type error rather than a runtime surprise.
+- **Readiness poll — DONE.** Both modes poll `GET /health` before returning,
+  bounded, and the spawn path fails with the child's own output attached.
 - **Root assertion — DONE.** The harness refuses to return a daemon whose
-  `health.root` is not the temp root, and takes it down on the way out. This is
-  requirement 4 and the reason it exists: a test that proceeds against a real
-  `~/.local/share/prag` can delete the developer's index.
-- **Concurrency safety — DONE.** Paths are passed explicitly through
-  `DaemonConfig.paths` instead of `process.env.PRAG_ROOT`. The previous version
-  set the variable, awaited `daemon.start()` (which yields) and restored
-  afterwards, so two overlapping starts could restore over each other --
-  `process.env` is exactly the "global state between instances" the
-  requirement forbids.
+  `health.root` is not this test's temp root and kills it. A test proceeding
+  against a real `~/.local/share/prag` can delete the developer's index.
+- **Concurrency safety — DONE.** No `process.env` mutation: paths go through
+  `DaemonConfig.paths` in-process, and through the child's own env when
+  spawned. Three harnesses start concurrently with distinct roots and ports in
+  `daemontest:test-harness.test.ts`.
+- **Teardown — DONE.** Unconditional: `POST /shutdown`, wait for exit with a
+  5s bound, `SIGKILL` on timeout, then `rm -rf` the root. Asserted by probing
+  the pid with signal 0 after teardown.
 
-Outstanding:
-
-- **Managed child with piped stdio — MISSING, and environment-constrained.**
-  `startTestDaemon` still constructs `new Daemon(...)` in-process. The stale
-  reason ("no CLI entry point exists yet") is gone -- `prag daemon start`
-  works -- but a real constraint replaced it: this project is developed in a
-  sandbox that isolates subprocess networking, which is why
-  `clitest:subprocess-e2e.test.ts` is the single spawning test and needs a
-  forwarded port. Switching the default harness to spawning would break the
-  suite in that environment. The realistic shape is an opt-in spawn mode, kept
-  green in CI, with in-process as the default; that is a decision about how the
-  project is developed, not a refactor, so it is recorded rather than taken.
-- **Environment contract — PARTIAL.** The daemon is configured directly
-  (root, port, token, `fake:<dim>` embedder), which is stronger than setting
-  environment variables for an in-process daemon. The variables the
-  requirement lists (`PRAG_PORT=0`, `PRAG_NO_SPAWN=1`,
-  `PRAG_EMBEDDING_MODEL=fake:384`, `PRAG_DEBOUNCE_MS=0`) only become meaningful
-  once there is a child process to set them for, so this closes with the item
-  above.
+CI runs the default (spawn). `PRAG_TEST_MODE=in-process` is for a machine that
+cannot route loopback to a child.
 
 See `issue:daemon-suite-flaky-under-parallel-execution.md`: the intermittent
-file-level failures that prompted this work were a Node bug
-(nodejs/node#63323, fixed in 24.19.0), not a harness defect. The harness was
-suspected and exonerated.
+failures that prompted this work were a Node bug (nodejs/node#63323, fixed in
+24.19.0), not a harness defect.

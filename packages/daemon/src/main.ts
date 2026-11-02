@@ -61,8 +61,12 @@ export function loadConfig(): DaemonConfig {
   ensurePragDirs(paths);
   const config = loadPragConfig(paths.configDir);
 
-  const port =
-    Number(process.env.PRAG_PORT) || config.server?.port || DEFAULT_PORT;
+  // `??`, not `||`: PRAG_PORT=0 means "let the kernel choose and report the
+  // bound port in state/daemon.port" (ADR-019), and `0 || ...` discarded it, so
+  // every test daemon silently took the fixed default and two could not run at
+  // once. readIntEnv already distinguishes unset from zero -- this line simply
+  // was not using it.
+  const port = readIntEnv("PRAG_PORT") ?? config.server?.port ?? DEFAULT_PORT;
   const token = process.env.PRAG_API_KEY ?? "guest";
 
   return {
