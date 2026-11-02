@@ -45,6 +45,14 @@ const DEFAULT_POOL_SIZE = 1;
  * Env wins over the file: the CLI passes PRAG_PORT when spawning, and
  * PRAG_API_KEY is the documented auth knob (ADR-013).
  */
+/** Integer env var, or undefined when unset/unparseable (so `??` can chain). */
+function readIntEnv(name: string): number | undefined {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") return undefined;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : undefined;
+}
+
 export function loadConfig(): DaemonConfig {
   const paths = resolvePragPaths();
   // Before reading config.json: nothing else creates configDir, so on a fresh
@@ -63,9 +71,12 @@ export function loadConfig(): DaemonConfig {
     paths,
     ingestion: {
       // Explicit 0 disables watching; otherwise the configured size, then 1.
+      // `??`, not `||`: with `||` the documented "0 disables" was unreachable from
+      // either knob -- 0 is falsy, so config.json fell through to DEFAULT_POOL_SIZE
+      // and PRAG_WORKER_POOL_SIZE=0 did too.
       poolSize:
-        Number(process.env.PRAG_WORKER_POOL_SIZE) ||
-        config.ingestion?.workerPoolSize ||
+        readIntEnv("PRAG_WORKER_POOL_SIZE") ??
+        config.ingestion?.workerPoolSize ??
         DEFAULT_POOL_SIZE,
       maxFileBytes: config.ingestion?.maxFileBytes,
       cooldownMs: process.env.PRAG_DEBOUNCE_MS
@@ -266,7 +277,18 @@ const invokedDirectly =
   import.meta.url === new URL(`file://${process.argv[1]}`).href;
 
 if (invokedDirectly) {
-  main().catch((err) => {
+  main().catch((err: unknown) => {
+    // The one startup failure a user can act on. The CLI makes the same promise
+    // when it probes the port (cli-and-mcp-interface.md §Port Identity), so the
+    // daemon must not answer with a bare stack trace.
+    if ((err as NodeJS.ErrnoException)?.code === "EADDRINUSE") {
+      const port = (err as { port?: number }).port ?? "?";
+      console.error(
+        `Port ${port} is in use by a different process. Set PRAG_PORT or server.port ` +
+          "in config.json to use a different port, or stop the conflicting process.",
+      );
+      process.exit(1);
+    }
     console.error("[prag] fatal:", err instanceof Error ? err.stack : err);
     process.exit(1);
   });

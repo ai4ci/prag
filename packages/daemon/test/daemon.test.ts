@@ -109,5 +109,59 @@ function daemonSuite(): void {
     });
     assert.equal(res.status, 404);
   });
+
+  void it("a port already in use rejects with EADDRINUSE instead of an unhandled throw", async () => {
+    // Two things were wrong before: the 'error' event had no listener, so it
+    // escaped as an unhandled exception (which in a test run is an unstable exit,
+    // and in the daemon killed the process with a bare stack trace), and start()
+    // resolved anyway because nothing rejected the listen promise.
+    const clashing = new Daemon({ port: PORT, token: "other" });
+    await assert.rejects(
+      () => clashing.start(schema, new FakeEmbeddingProvider(4)),
+      (err: NodeJS.ErrnoException) => {
+        assert.equal(err.code, "EADDRINUSE");
+        return true;
+      },
+    );
+    assert.ok(!clashing.listening, "a daemon that failed to bind must not report listening");
+  });
+
+  void it("a stalled connection does not hold shutdown open", async () => {
+    // headersTimeout/requestTimeout exist so a client that opens a socket and sends
+    // nothing cannot keep the server pending forever; the user-visible form of that
+    // is `prag daemon stop` returning while such a connection is open.
+    const spare = new Daemon({ port: PORT + 1, token: "spare" });
+    await spare.start(schema, new FakeEmbeddingProvider(4));
+    const net = await import("node:net");
+
+    // A socket that connects and says nothing at all.
+    const stalled = net.connect(PORT + 1, "127.0.0.1");
+    stalled.on("error", () => {});
+    await new Promise<void>((resolve, reject) => {
+      stalled.once("connect", () => resolve());
+      stalled.once("error", reject);
+    });
+
+    const started = Date.now();
+    await spare.stop();
+    const elapsed = Date.now() - started;
+    stalled.destroy();
+    assert.ok(
+      elapsed < 5_000,
+      `stop() took ${elapsed}ms with one idle connection open; closeAllConnections() ` +
+        "must run before close() or shutdown waits for the client to hang up",
+    );
+  });
+
+  void it("bounds request and keep-alive timeouts", () => {
+    // Asserted as configuration because the platform's own timer granularity makes
+    // a behavioural test of headersTimeout a 10-second test.
+    const srv = (daemon as unknown as {
+      server?: { headersTimeout?: number; requestTimeout?: number; keepAliveTimeout?: number };
+    }).server;
+    assert.equal(srv?.headersTimeout, 10_000);
+    assert.equal(srv?.requestTimeout, 60_000);
+    assert.equal(srv?.keepAliveTimeout, 5_000);
+  });
 }
 void describe("Daemon", daemonSuite);

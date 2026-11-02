@@ -6,7 +6,7 @@
 
 import {
   createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 
@@ -58,7 +58,16 @@ const DEFAULT_PORT = 7724; // used by main.ts via loadConfig()
 export { DEFAULT_PORT };
 export { API_VERSION };
 
-export const DAEMON_VERSION = "0.1.0";
+/**
+ * Package semver, for diagnostics only (ADR-016: never compared). Read from this
+ * package's own package.json so it cannot go stale on a release bump -- it was a
+ * second literal, and the two agreed only by luck.
+ */
+export const DAEMON_VERSION = (
+  JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
+    version?: string;
+  }
+).version ?? "0.0.0";
 
 /** How long a cached grants/status read may be reused during a scan. */
 const STATUS_CACHE_MS = 1_000;
@@ -221,9 +230,28 @@ export class Daemon {
 
     this.startTime = Date.now();
 
-    return new Promise((resolve) => {
-      this.server = createServer((req, res) => this._handle(req, res));
-      this.server.listen(this.config.port, "127.0.0.1", () => {
+    this.server = createServer((req, res) => this._handle(req, res));
+    // A loopback server that never times out keeps a worker thread's event loop
+    // referenced for the lifetime of a stuck client: an SSE reader that goes away
+    // without closing, or a request whose body never arrives, would hold shutdown
+    // open. Headers are read server-side in full before dispatch, so a 10s header
+    // window cannot cut off a legitimately slow caller -- only a stalled one.
+    this.server.requestTimeout = 60_000;
+    this.server.headersTimeout = 10_000;
+    this.server.keepAliveTimeout = 5_000;
+
+    await new Promise<void>((resolve, reject) => {
+      // Without this, EADDRINUSE -- the one failure a user can act on -- surfaced as
+      // an unhandled 'error' event and killed the process with a bare stack trace,
+      // instead of the message cli-and-mcp-interface.md specifies.
+      this.server!.once("error", reject);
+      this.server!.listen(this.config.port, "127.0.0.1", () => {
+        this.server!.removeAllListeners("error");
+        // After bind, a listen error is not recoverable; log rather than throw from
+        // inside an http callback where nothing can catch it.
+        this.server!.on("error", (err) => {
+          console.error(`[prag] server error: ${err.message}`);
+        });
         const addr = this.server!.address();
         if (addr && typeof addr === "object") {
           this._boundPort = addr.port;
