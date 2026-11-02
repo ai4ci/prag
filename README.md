@@ -59,6 +59,7 @@ prag/
 - [ ] Web ingestion: the pluggable fetch-backend interface (ADR-024) and its `plain-fetcher` / Firecrawl / Exa backends.
 - [ ] Hardware-acceleration provider selection and local-first enforcement check.
 - [ ] Bun native-addon spike.
+- [ ] No installation instructions and no installable artifact (`issue:no-installation-instructions.md`) — `prag` currently only runs from source via `tsx`.
 - [ ] CI workflow at `.github/workflows/ci.yaml` (sandbox-protected; must be added on the host).
 
 ---
