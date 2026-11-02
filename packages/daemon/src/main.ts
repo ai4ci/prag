@@ -23,7 +23,7 @@ import {
   type PragPaths,
 } from "@prag/core";
 import { join } from "node:path";
-import { writeFileSync, chmodSync } from "node:fs";
+import { writeFileSync, chmodSync, mkdirSync } from "node:fs";
 import { Daemon, type DaemonConfig } from "./daemon.js";
 
 // ── Database location ────────────────────────────────────────────────
@@ -177,6 +177,8 @@ export function writeRuntimeFiles(
   port: number,
   token: string,
 ): void {
+  // Nothing else creates runDir; LanceDB only makes its own data directory.
+  mkdirSync(paths.runDir, { recursive: true });
   writeFileSync(join(paths.runDir, "daemon.port"), String(port));
   if (token === "guest") {
     const tokenPath = join(paths.runDir, "daemon.token");
