@@ -108,7 +108,6 @@ _(no results)_
 - [Implement hybrid search with LanceDB BM25 FTS and Reciprocal Rank Fusion](tasks/hybrid-search-rrf.md)
 - [Implement discovery filters, skip reporting and watch admission control](tasks/ingestion-limits-and-admission.md)
 - [Implement the ingestion worker pool with main-thread embedding and writes](tasks/ingestion-worker-pool.md)
-- [Implement LanceDB initialization scripts with 7-table schema setup](tasks/lancedb-init-scripts.md)
 - [Implement grants and projects tables with allow/deny evaluation and Chokidar filter integration](tasks/project-registry-and-exclusions.md)
 - [Implement PRAG_ROOT isolation and assertable resolved paths](tasks/test-environment-isolation.md)
 - [Maintain the test fixture corpus and git fixture builder](tasks/test-fixture-corpus.md)

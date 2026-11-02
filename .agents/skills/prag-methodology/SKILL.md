@@ -44,15 +44,27 @@ rejected with `model/path-removed`). URIs are **curies** — `feature:x.md`, not
     `void describe("Daemon", daemonSuite);`). Anonymous arrow callbacks carry no
     anchor and cannot be linked.
 
-### Every task must be tested
+### Every implemented task must be tested
 
-`task "0..*" --> "1..*" test : tested-by` — a task with no covering test suite
-is a hard `instance/cardinality` error from `loom validate`. Link at suite
-granularity:
+`task "0..*" --> "0..*" test : tested-by` — link the suite in the same commit that
+implements the task:
 
 ```bash
 loom link task:hybrid-search-rrf.md tested-by "coretest:search.test.ts#searchSuite"
 ```
+
+This is `0..*`, not `1..*`, on purpose. Cardinality in the model cannot be
+conditioned on lifecycle status, so `1..*` turned every unimplemented
+`status: todo` task into a hard `instance/cardinality` error — which made
+`loom validate` fail on an otherwise clean tree and unusable as a gate. The
+enforceable form is a view instead:
+
+```bash
+loom index && grep -A5 "untested_task_list" design/INDEX.md   # tasks under way or done, no suite
+```
+
+A non-empty result is a real gap: a task that has code but names no suite. An
+empty result plus eight `status: todo` tasks is the expected state.
 
 The edge direction is **task -> test** on purpose. The reverse (`test -> task`)
 would have to be stored as a reverse-link comment in the test file, and loom
@@ -142,7 +154,16 @@ loom rebuild          # refresh the DuckDB projection + namespaces.ttl
 loom render           # refresh the <!-- loom view: ... --> blocks in the INDEX files
 loom index --check    # no legacy loom:links blocks should be stale
 ```
-Ensure zero errors reported in `design/VALIDATION.md`.
+Require `loom validate` to print `ok: true` (exit 0). Its report is
+`design/.loom/VALIDATION.md` -- gitignored, like the per-branch DuckDB beside it.
+(The tracked `design/VALIDATION.md` this line used to point at was written by loom
+<= 0.8 and is stale: newer loom writes only under `.loom/`, so the old file kept
+reporting errors that had already been fixed. It is deleted; do not resurrect it.)
+
+Note for editing `document-model.mmd`: a `%%` comment between a `%% @view name`
+line and its SQL becomes part of the query, which then fails at render time with
+`Query failed: Parser Error: syntax error at or near "The"`. Put commentary above
+the `@view` line.
 
 ## 5. Navigational Indexes
 

@@ -100,11 +100,14 @@ classDiagram
     class daemontest
     class clitest
 
-    %% Every task must name at least one test function that covers it.
-    %% Direction is task -> test so the edge lives in task frontmatter:
-    %% loom's reverse-link comments canonicalise a test anchor back to the
-    %% `src` scheme, which rejects a test-family relation.
-    task "0..*" --> "1..*" test : tested-by
+    %% Every task should name the test suite that covers it -- but the link can
+    %% only exist once the code does, and loom cardinality cannot be conditioned
+    %% on lifecycle status. `1..*` here made eight unimplemented `status: todo`
+    %% tasks a hard error, so `loom validate` failed on a clean tree and could not
+    %% gate anything. The enforceable form of the rule is the untested_task_list
+    %% view below (tasks under way or finished with no suite), and the discipline
+    %% is: link the suite in the commit that implements the task.
+    task "0..*" --> "0..*" test : tested-by
 
     src <|-- test
     test <|-- coretest
@@ -157,3 +160,10 @@ classDiagram
     %% FROM task
     %% WHERE NOT status='done'
     %% ORDER BY priority DESC
+
+    %% @view untested_task_list
+    %% SELECT uri, status
+    %% FROM task
+    %% WHERE status IN ('in_progress', 'accepted', 'done')
+    %%   AND uri NOT IN (SELECT subject FROM edge WHERE relation='tested-by')
+    %% ORDER BY uri ASC
