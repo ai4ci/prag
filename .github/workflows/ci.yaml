@@ -50,7 +50,7 @@ jobs:
         run: |
           set -euo pipefail
           export PRAG_ROOT="$RUNNER_TEMP/prag-ci"
-          prag() { node_modules/.bin/prag "$@"; }
+          prag() { "$GITHUB_WORKSPACE/node_modules/.bin/prag" "$@"; }
 
           prag daemon start
           trap 'prag daemon stop || true' EXIT
@@ -74,9 +74,15 @@ jobs:
 
           # The other half of that contract: from a directory inside no project, it
           # must fail rather than quietly search everything.
-          if (cd "$GITHUB_WORKSPACE/packages" && prag search-local "anything" >/dev/null 2>&1); then
-            echo "search-local widened to the whole index outside a project"; exit 1
-          fi
+          # The exit code is asserted, not merely non-zero: PROJECT_ID_REQUIRED maps
+          # to EXIT.USAGE (2), so a 127 from an unresolvable path can no longer pass
+          # for a refusal -- which is exactly how this assertion went green before.
+          rc=0
+          (cd "$GITHUB_WORKSPACE/packages" && prag search-local "anything" >/dev/null 2>&1) || rc=$?
+          [ "$rc" -eq 2 ] || {
+            echo "search-local outside a project exited $rc, expected 2 (PROJECT_ID_REQUIRED)"
+            exit 1
+          }
 
   # The default embedder is a real 34 MB download from Hugging Face, so a plain
   # unit-test pass never exercises ONNX. Kept separate and continue-on-error:
@@ -97,7 +103,7 @@ jobs:
           PRAG_ROOT: ${{ runner.temp }}/prag-onnx
         run: |
           set -euo pipefail
-          prag() { node_modules/.bin/prag "$@"; }
+          prag() { "$GITHUB_WORKSPACE/node_modules/.bin/prag" "$@"; }
           prag daemon start
           trap 'prag daemon stop || true' EXIT
           prag watch "$GITHUB_WORKSPACE/packages/core"
