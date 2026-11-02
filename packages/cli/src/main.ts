@@ -220,8 +220,15 @@ export async function main(): Promise<void> {
     const uri = rest[0];
     if (!uri) { console.error("watch requires a URI"); usage(ExitCode.USAGE); }
     const normalizedUri = normalizeUri(uri);
-    await daemonClient.addGrant(normalizedUri, "allow");
-    console.log(`Watching ${normalizedUri}`);
+    await daemonClient.addGrant(`${normalizedUri}/**`, "allow");
+
+    // The grant alone indexes nothing: the daemon only watches registered
+    // projects. projectId is the normalized root URI (cli-and-mcp-interface.md),
+    // which is also what `search-local` resolves the cwd against.
+    const projectId = getFlag(rest, "--project", "-p") ?? normalizedUri;
+    await daemonClient.registerProject(projectId, normalizedUri);
+    console.log(`Watching ${normalizedUri} (project ${projectId})`);
+    console.log("Run `prag sync` to index it now, or let the watcher catch changes.");
     return;
   }
 
@@ -381,8 +388,20 @@ function getFlag(rest: string[], long: string, short?: string): string | undefin
 
 // ── Entry ──────────────────────────────────────────────────────────────
 
-if (import.meta.filename === process.argv[1]) {
-  main().catch((err) => {
+/**
+ * Entry used by both `node bin/prag.mjs` (installed `prag`) and the direct
+ * `tsx src/main.ts` invocation. The previous guard compared import.meta.filename
+ * to process.argv[1], which is the *wrapper's* path when launched through bin,
+ * so the installed command parsed its args and exited silently.
+ */
+// Self-start when run directly (`tsx packages/cli/src/main.ts …`, which is what
+// the tests and README's source-only path do). The bin wrapper calls run().
+if (/packages\/cli\/src\/main\.ts$/.test(process.argv[1] ?? "")) {
+  void run();
+}
+
+export function run(): Promise<void> {
+  return main().catch((err) => {
     if (err instanceof DaemonError) {
       console.error(`Error [${err.code}]: ${err.message}`);
       if (err.remedy) console.error(`Remedy: ${err.remedy}`);
