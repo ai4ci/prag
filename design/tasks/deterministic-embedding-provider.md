@@ -16,6 +16,8 @@ addressed-by:
   - src:core/src/embedding.ts#getProvider
   - src:core/src/embedding.ts#parseFakeDim
 tested-by:
+  - daemontest:fake-provider-entry.test.ts#fakeProviderEntryPointSuite
+  - coretest:paths.test.ts#loadPragConfigSuite
   - coretest:embedding.test.ts#fakeEmbeddingProviderSuite
   - coretest:embedding.test.ts#getProviderRegisterProviderSuite
   - coretest:embedding.test.ts#parseFakeDimSuite
@@ -38,33 +40,36 @@ Give the embedding pipeline a seam so tests can run offline, instantly, and dete
 
 ## Implementation status
 
-Reverted from `done`: the provider itself is complete and correct, but nothing in production
-ever selects it — the seam exists and no code steps through it.
+Complete. The provider was always correct; what was missing was that **nothing in
+production could reach it**, and the reason was a defect larger than this task.
 
-- **Config/env selection — MISSING.** `getProvider()` (`packages/core/src/embedding.ts:136`) has
-  **zero** non-test callers (`grep -rn "getProvider|PRAG_EMBEDDING_MODEL|embedding.model"
-  packages --include=*.ts` matches only `embedding.ts`, its re-export, and
-  `core/test/embedding.test.ts`). `Daemon` accepts an already-built `embedder`
-  (`packages/daemon/src/daemon.ts:90`) and the only construction site is the in-process harness
-  (`packages/daemon/src/test-harness.ts:77`, `new FakeEmbeddingProvider(dim)`). So
-  `PRAG_EMBEDDING_MODEL=fake:384` and `embedding.model` are inert: there is no process to read
-  them, because the daemon has no entry point — `issue:daemon-entry-point-has-no-main.md`.
-- **Sidecar pinning — MISSING.** `EmbeddingSidecar` (`embedding.ts:36-42`) is a type with no
-  writer, reader, or path constant. Fake/real mixing is therefore undetected, which is exactly
-  what requirement 4 exists to prevent. Tracked as the missing gate in
-  `task:embedding-model-migration.md`.
-- **Verification — 0 of 3 met.** (a) no end-to-end double-index test in `packages/daemon/test/`;
-  determinism is asserted at unit level only (`coretest:embedding.test.ts#fakeEmbeddingProviderSuite`,
-  `coretest:chunker.test.ts`). (b) no zero-outbound-connection assertion exists anywhere
-  (`grep createConnection|socket|network packages/*/test` → no match). (c) no mismatch test —
-  `grep mismatch packages/daemon/src/daemon.ts` → no match.
+- **Config/env selection — done.** `loadPragConfig()` (`packages/core/src/paths.ts`) called
+  `require("node:fs")` inside a `try { … } catch { return {} }`. This is an ESM package, so
+  `require` is undefined: **every** `config.json` read threw, was swallowed, and returned `{}`.
+  `embedding.model` — and the port, pool size, thresholds and every other setting in that file —
+  had never had any effect, with no symptom anywhere. It now imports `fs` normally, and a
+  malformed `config.json` throws rather than being swallowed too: starting on the wrong model
+  because of a stray comma is worse than failing loudly. `loadConfig()` maps
+  `PRAG_EMBEDDING_MODEL` over the file value and `bootstrap()` resolves the result.
+- **Registry precedence — done.** `getProvider()` returned the first prefix match in insertion
+  order, so `registerProvider("onnx:Xenova/bge-small-en-v1.5", …)` lost to the built-in `onnx:`
+  factory. Longest prefix now wins, which is what makes the documented extension point usable
+  for a single model.
+- **Sidecar pinning — done.** `bootstrap()` writes `.embedding-model.json`
+  (`readEmbeddingSidecar`/`writeEmbeddingSidecar`) with the same fields for `fake:64` as for a
+  real model, and refuses a mismatch. The check runs **before** `provider.load()`, so a doomed
+  start does not first download 130MB of weights for a daemon that will refuse to serve them.
 
-Satisfied: deterministic hash-derived vectors with no network/fs/model load
-(`embedding.ts:57-68`), `parseFakeDim` + `registerProvider` extension point (`:136`, tested
-`#getProviderRegisterProviderSuite`, `#parseFakeDimSuite`), explicit "plumbing only"
-documentation (`:57-58`), shipped in `src/` not test code and re-exported (`index.ts:41-42`),
-and `maxSeqLength = 512` declared (`:47,68`, tested) — though that value reaches neither the
-startup check nor a sidecar.
+## Verification (all three requirements executed)
 
-Remaining: construct the provider from config/env in the daemon entry point; write and read the
-sidecar; add the three verification tests.
+`packages/daemon/test/fake-provider-entry.test.ts` goes through `loadConfig()`/`bootstrap()`
+rather than constructing the provider, so it would have caught the swallowed `require`:
+
+- Both documented knobs select the provider, env overriding the file.
+- Identical hashes **and vectors** across two independent daemons with two fresh databases.
+  `chunkHash` is a content hash, so the vectors are the claim being made.
+- Zero outbound connections over a real index-and-search cycle. Patched on `Socket.prototype`,
+  not the `net` module: ESM namespace objects are sealed, and undici reaches TCP through that
+  one method. Loopback to the daemon under test is allowed; anything else fails the test.
+- Mismatch refused fake→real and real→fake, with the `prag reembed` remedy in the message, and
+  the gate proven to fire before `load()`.

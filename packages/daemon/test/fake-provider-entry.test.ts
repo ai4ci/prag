@@ -133,7 +133,8 @@ async function indexOneFile(startup: Startup, root: string, projectId: string): 
   assert.ok(body.hits.length > 0, "the cycle must actually index and retrieve");
 }
 
-describe("fake provider through the daemon entry point", () => {
+function fakeProviderEntryPointSuite(): void {
+  describe("fake provider through the daemon entry point", () => {
   const roots: string[] = [];
   const startups: Startup[] = [];
 
@@ -330,4 +331,6 @@ describe("fake provider through the daemon entry point", () => {
       proto.connect = real;
     }
   });
-});
+  });
+}
+void describe("fake provider entry point", fakeProviderEntryPointSuite);
