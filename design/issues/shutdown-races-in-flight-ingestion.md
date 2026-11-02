@@ -2,7 +2,7 @@
 class: issue
 id: shutdown-races-in-flight-ingestion.md
 title: Daemon.stop() closes the worker pool while watcher events are still arriving
-status: open
+status: resolved
 priority: medium
 relates-to:
   - feature:background-worker-queue.md
@@ -49,3 +49,31 @@ next start re-indexes it.
 `task:sync-drain-barrier.md` made `/sync` a real barrier for the *caller*; this is the same
 un-awaited-promise class of bug on the shutdown path (`Daemon.stop()` vs
 `IngestionQueue.close()`, which awaits `drain()` but not the pool close).
+
+## Resolution (2026-11-02, branch `mvp`)
+Two faults, both fixed in `packages/daemon/src/ingestion-queue.ts`:
+
+1. **Events after the drain.** `stop()` drained and then closed the pool while
+   chokidar's initial scan was still emitting `add`, so `_onEvent` re-queued work
+   and the cooldown timer fired into a closed pool. Added `_closing`, set by the new
+   `IngestionQueue.stopWatchers()`, which `Daemon.stop()` now calls *before* the
+   final drain; `_onEvent` and `_onUnlink` refuse once closing, and `_reconcile`
+   returns early so a shutdown walk cannot mark files as seen that it will not index.
+2. **The untracked drain (the actual reproduction).** `POST /sync` races its own
+   deadline and returns `SYNC_TIMEOUT` while `flushAll` keeps running with no owner.
+   `stop()` then closed the pool underneath it — which is exactly the stack recorded
+   above (`IngestionQueue.flushAll` → `worker-pool.ts:103`). Drains are now
+   registered in `_drains`, `stopWatchers()` awaits them while the pool is still
+   open, and `_flushAll` refuses to dispatch once closing.
+
+Executed verification: `grep`/run per file to localise it — before the fix
+`packages/daemon/test/ingestion-e2e.test.ts` printed `worker pool is closed` on
+every run, with the stack pointing at `ingestion-queue.ts:530` from the
+`returns SYNC_TIMEOUT instead of hanging when the drain cannot finish` test. After
+the fix that file is clean 3/3 runs and the full suite is clean (`58 + 59 + 27`
+tests passing), with no `worker pool is closed` on stderr.
+
+Not covered: the acceptance criterion "a fresh daemon over the same index finds all
+N files" is not asserted — a file refused during shutdown is recovered only because
+the next start reconciles from zero, which `sync-drain-barrier.md` covers for the
+start path but not across a restart.

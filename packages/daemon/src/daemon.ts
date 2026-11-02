@@ -224,7 +224,9 @@ export class Daemon {
     // changed shortly before shutdown were silently never indexed.
     if (this.ingestionQueue) {
       try {
-        await this.ingestionQueue.flushAll();
+        // Watchers first, then drain: flushing while chokidar is still enumerating
+        // left writes arriving after the pool closed (issue:shutdown-races-…).
+        await this.ingestionQueue.stopWatchers();
       } catch (err) {
         console.error("[prag] flush during shutdown failed:", err);
       }

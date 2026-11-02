@@ -52,7 +52,6 @@ _(no results)_
 
 - [LanceDB schema evolution relies on drop-and-reindex](issues/lancedb-schema-migration-strategy.md)
 - [No installation instructions or installable artifact](issues/no-installation-instructions.md)
-- [Daemon.stop() closes the worker pool while watcher events are still arriving](issues/shutdown-races-in-flight-ingestion.md)
 - [No budget or alert for chunks_pool disk usage growth](issues/chunk-pool-disk-usage-growth.md)
 - [Per-caller permission grants for search results](issues/search-result-permission-grants.md)
 <!-- loom view: issue_list end -->
@@ -64,6 +63,7 @@ _(no results)_
 - [packages/daemon has no executable entry point — lazy spawn and prag daemon start can never succeed](issues/daemon-entry-point-has-no-main.md)
 - [Ingestion writes a random fileVersionId and empty contentHash, and the upsert helpers append, so nothing is content-addressable or deduplicated](issues/file-level-cas-never-written.md)
 - [Root npm run lint cannot run — tsc --noEmit fails TS6059 rootDir for every package file](issues/root-tsconfig-breaks-typecheck.md)
+- [Daemon.stop() closes the worker pool while watcher events are still arriving](issues/shutdown-races-in-flight-ingestion.md)
 - [Unlink and prune delete chunks_pool/vector_pool rows without --gc-chunks, destroying content other projects still reference](issues/unlink-prune-deletes-shared-pool-rows.md)
 - [WorkerPool respawns twice per crash and leaves a dead worker index in the idle list, so a request can hang forever](issues/worker-pool-double-respawn.md)
 <!-- loom view: resolved_issue_list end -->

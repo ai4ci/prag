@@ -75,6 +75,15 @@ export class IngestionQueue {
   private reconciledAt = new Map<string, number>();
   private inFlight = new Set<Promise<unknown>>();
   private _paused = false;
+  /**
+   * Set by stopWatchers(): no more events are admitted, and nothing is dispatched
+   * afterwards. Without it a chokidar `add` landing during shutdown re-populated
+   * the dirty set and its cooldown timer fired after the worker pool had closed,
+   * so the write failed with "worker pool is closed" (issue:shutdown-races-…).
+   */
+  private _closing = false;
+  /** Drains currently running, including ones whose caller gave up on them. */
+  private _drains = new Set<Promise<number>>();
   private _heldEvents: Array<{
     type: "add" | "change" | "unlink";
     projectId: string;
@@ -177,6 +186,26 @@ export class IngestionQueue {
   }
 
   /** Stop all watchers. */
+  /**
+   * Close the watchers and refuse further events. Call this before the final
+   * drain: a drain that runs while chokidar is still enumerating races the very
+   * events it is meant to have finished with.
+   */
+  async stopWatchers(): Promise<void> {
+    this._closing = true;
+    const closers: Array<Promise<void>> = [];
+    for (const watcher of this.watchers.values()) closers.push(watcher.close());
+    this.watchers.clear();
+    await Promise.allSettled(closers);
+    // A /sync that already timed out is still draining. Wait for it: its dispatches
+    // are owed and the pool is still open, so they land instead of erroring.
+    await Promise.allSettled([...this._drains]);
+    // Whatever the initial scan queued but had not yet debounced into a dispatch
+    // is still owed, and it is now the last thing that will ever be queued.
+    // _flushAll (not flushAll) because flushAll now refuses once closing.
+    await this._flushAll();
+  }
+
   async close(): Promise<void> {
     const closers: Array<Promise<void>> = [];
     for (const [projectId, watcher] of this.watchers) {
@@ -386,6 +415,9 @@ export class IngestionQueue {
       this._heldEvents.push({ type: eventType, projectId, filePath });
       return;
     }
+    // After stopWatchers() the file stays on disk, and the next daemon start
+    // reconciles it; reporting it as pending is what pendingCount() still does.
+    if (this._closing) return;
     const uri = resolve(filePath);
     const existing = this.dirty.get(uri);
 
@@ -400,6 +432,7 @@ export class IngestionQueue {
   }
 
   private _onUnlink(projectId: string, filePath: string): void {
+    if (this._closing) return;
     if (this._paused) {
       this._heldEvents.push({ type: "unlink", projectId, filePath });
       return;
@@ -478,6 +511,25 @@ export class IngestionQueue {
    * call time and then reported a drain that flushed nothing.
    */
   async flushAll(projectId?: string): Promise<number> {
+    // A drain that returns after SYNC_TIMEOUT keeps running unsupervised in the
+    // handler; if nothing tracks it, stop() closes the worker pool underneath it
+    // and the write dies with "worker pool is closed". Registering it is what lets
+    // shutdown wait for it instead of racing it.
+    const drain = this._flushAll(projectId);
+    this._drains.add(drain);
+    try {
+      return await drain;
+    } finally {
+      this._drains.delete(drain);
+    }
+  }
+
+  private async _flushAll(projectId?: string): Promise<number> {
+    // A drain started during shutdown could dispatch after the pool closes, and
+    // the caller cannot act on the answer anyway. Report nothing flushed; the next
+    // start reconciles from zero and indexes what is still on disk.
+    if (this._closing) return 0;
+
     // Trust the disk, not event delivery (see _reconcile).
     await this._reconcile(projectId);
 
@@ -537,6 +589,11 @@ export class IngestionQueue {
    * today; upgrade to watching a directory-mtime frontier if /sync gets slow.
    */
   private async _reconcile(projectId?: string): Promise<void> {
+    // During shutdown the walk would mark files as seen while `_onEvent` refuses
+    // them, so nothing must be recorded here. The next start reconciles from zero
+    // and picks up whatever this one did not reach.
+    if (this._closing) return;
+
     const ids = projectId ? [projectId] : [...this.projectDirs.keys()];
     for (const id of ids) {
       const dir = this.projectDirs.get(id);
