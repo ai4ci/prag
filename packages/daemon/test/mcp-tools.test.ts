@@ -312,6 +312,65 @@ function mcpPolicyToolSuite(): void {
     assert.equal(await ctx.schema!.table("chunks_pool").countRows(), before);
   });
 
+  void it("search_local scopes to the checked-out branch when none is given", async () => {
+    // The result echoes the scope it applied, so this pins the default rather
+    // than trusting it: `null` would mean "spanned every branch", which is what
+    // omitting the filter used to do.
+    const result = await ctx.session!.request("tools/call", {
+      name: "search_local",
+      arguments: { query: "hello world", projectId: ctx.repo, mode: "fts" },
+    });
+    assert.notEqual(result.isError, true, textOf(result));
+    const body = JSON.parse(textOf(result)) as { branch: string | null };
+    assert.equal(body.branch, "main", textOf(result));
+
+    const explicit = await ctx.session!.request("tools/call", {
+      name: "search_local",
+      arguments: { query: "hello world", projectId: ctx.repo, mode: "fts", branch: "main" },
+    });
+    assert.equal(
+      JSON.parse(textOf(explicit)).branch,
+      "main",
+      "an explicit branch must behave the same as the default",
+    );
+  });
+
+  void it("search_all spans branches and advertises no branch filter", async () => {
+    const { tools } = await ctx.session!.request("tools/list");
+    const all = tools.find((t: { name: string }) => t.name === "search_all");
+    assert.ok(!("branch" in (all.inputSchema?.properties ?? {})), "search_all must not accept branch");
+
+    const result = await ctx.session!.request("tools/call", {
+      name: "search_all",
+      arguments: { query: "hello world", mode: "fts" },
+    });
+    assert.notEqual(result.isError, true, textOf(result));
+    assert.equal(JSON.parse(textOf(result)).branch, null, textOf(result));
+  });
+
+  void it("both search tools take the three modes", async () => {
+    const { tools } = await ctx.session!.request("tools/list");
+    for (const name of ["search_local", "search_all"]) {
+      const tool = tools.find((t: { name: string }) => t.name === name);
+      const mode = tool.inputSchema?.properties?.mode;
+      assert.ok(mode, `${name} must declare mode`);
+      assert.deepEqual(
+        [...mode.enum].sort(),
+        ["fts", "hybrid", "vector"],
+        JSON.stringify(mode),
+      );
+      assert.equal(mode.default, "hybrid");
+    }
+
+    // fts is not decoration: a term search must find the literal text.
+    const result = await ctx.session!.request("tools/call", {
+      name: "search_local",
+      arguments: { query: "greeting", projectId: ctx.repo, mode: "fts" },
+    });
+    assert.notEqual(result.isError, true, textOf(result));
+    assert.ok(JSON.parse(textOf(result)).hits.length > 0, textOf(result));
+  });
+
   void it("two live sessions both answer tool calls", async () => {
     // A shared McpServer would have answered the second GET /mcp with a 500, so
     // this is the regression test for the one-server-per-session change.

@@ -17,12 +17,16 @@ import { URL } from "node:url";
 import {
   type LanceDbSchema,
   type EmbeddingProvider,
+  type SearchMode,
   hybridSearch,
   DaemonFailure,
   type ErrorEnvelope,
   type FailureCode,
 } from "@prag/core";
 import { assertProjectRegistered } from "./project-lookup.js";
+
+/** The three search modes, as the schema enum the interface document specifies. */
+const SEARCH_MODES = ["hybrid", "vector", "fts"] as const;
 
 /**
  * The daemon-side operations the policy tools need. Passed in rather than
@@ -32,6 +36,7 @@ import { assertProjectRegistered } from "./project-lookup.js";
  * (ADR-009 §4), so the two interfaces would disagree about what a deny means.
  */
 export interface McpOperations {
+  currentBranch(projectId: string): Promise<string>;
   watchUri(opts: {
     uri?: string;
     projectId?: string;
@@ -95,7 +100,13 @@ export class McpHandler {
   ) {}
 
   /** Shared search path so both tools build the candidate pool identically. */
-  private _search(query: string, limit: number, projectId?: string, branch?: string) {
+  private _search(
+    query: string,
+    limit: number,
+    projectId?: string,
+    branch?: string,
+    mode: SearchMode = "hybrid",
+  ) {
     return hybridSearch(
       this.db.table("chunks_pool"),
       this.db.table("vector_pool"),
@@ -109,7 +120,7 @@ export class McpHandler {
         projectId,
         branch,
         branchMapping: this.db.table("branch_mapping"),
-        mode: "hybrid",
+        mode,
       },
     );
   }
@@ -172,17 +183,24 @@ export class McpHandler {
         limit: z
           .number()
           .optional()
-          .default(10)
+          .default(5)
           .describe("Max file-level results"),
+        mode: z
+          .enum(SEARCH_MODES)
+          .optional()
+          .default("hybrid")
+          .describe("hybrid (default), pure vector, or pure full-text"),
         branch: z
           .string()
           .optional()
           .describe(
-            "Restrict to one branch's file versions (plus '$default'). Omit to search " +
-              "every branch of the project; an MCP client knows its own checkout, the daemon cannot.",
+            "Restrict to one branch's file versions (plus '$default'). Omit to use the " +
+              "branch the project's checkout is currently on; an MCP client knows its own " +
+              "workspace, and the alternative -- defaulting to '$default' -- would return " +
+              "almost nothing for any git workspace, whose files are indexed under a real branch.",
           ),
       },
-    }, async ({ query, projectId, limit, branch }) => {
+    }, async ({ query, projectId, limit, mode, branch }) => {
       try {
         if (!projectId) {
           // Optional in the schema so the failure arrives as an envelope with a
@@ -194,7 +212,13 @@ export class McpHandler {
           );
         }
         await assertProjectRegistered(this.db, projectId);
-        const result = await this._search(query, limit ?? 10, projectId, branch);
+        const result = await this._search(
+          query,
+          limit ?? 5,
+          projectId,
+          branch ?? (await this.ops.currentBranch(projectId)),
+          mode ?? "hybrid",
+        );
         return {
           content: [
             {
@@ -217,12 +241,21 @@ export class McpHandler {
         limit: z
           .number()
           .optional()
-          .default(10)
+          .default(5)
           .describe("Max file-level results"),
+        mode: z
+          .enum(SEARCH_MODES)
+          .optional()
+          .default("hybrid")
+          .describe("hybrid (default), pure vector, or pure full-text"),
+        // No `branch`, though the interface document lists one: a branch identifies
+        // a version of ONE project's files, and this tool spans projects. Accepting
+        // and ignoring it would be the same silent-widening lie the projectId rule
+        // exists to prevent.
       },
-    }, async ({ query, limit }) => {
+    }, async ({ query, limit, mode }) => {
       try {
-        const result = await this._search(query, limit ?? 10, undefined);
+        const result = await this._search(query, limit ?? 5, undefined, undefined, mode ?? "hybrid");
         return {
           content: [
             { type: "text" as const, text: JSON.stringify(result) },

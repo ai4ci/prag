@@ -194,6 +194,7 @@ export class Daemon {
         applyGrant: (pattern, action, reason) => this.applyGrant(pattern, action, reason),
         prune: (gcChunks) => this.prune(gcChunks),
         statusFor: (uri) => this.statusFor(uri),
+        currentBranch: (projectId) => this.currentBranchFor(projectId),
       });
     }
 
@@ -303,7 +304,7 @@ export class Daemon {
    *
    * Non-git workspaces get `$default`.
    */
-  private async _branchFor(projectId: string): Promise<string> {
+  async currentBranchFor(projectId: string): Promise<string> {
     const root = this.ingestionQueue?.registeredRoots().find(([id]) => id === projectId)?.[1];
     // A project with no watcher (registered before ingestion existed, or via a
     // bare POST /projects) has no root to read HEAD from, so it has no branch.
@@ -468,7 +469,7 @@ export class Daemon {
     // Drop that branch's pointer and let the version go only if nothing else
     // holds it — a file deleted on a feature branch is still indexed on main.
     const projectId = String(existing[0].projectId ?? "");
-    const branch = await this._branchFor(projectId);
+    const branch = await this.currentBranchFor(projectId);
     await this.db
       .table("branch_mapping")
       .delete(
@@ -501,7 +502,7 @@ export class Daemon {
       .toArray()) as Array<Record<string, unknown>>;
     const current = existing[0];
 
-    const branch = await this._branchFor(result.projectId);
+    const branch = await this.currentBranchFor(result.projectId);
 
     if (current && current.contentHash === contentHash) {
       // Refresh the lease only; the index is already correct.
