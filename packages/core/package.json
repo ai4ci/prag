@@ -19,5 +19,8 @@
     "build": "tsc -p tsconfig.build.json",
     "test": "tsx --test 'test/**/*.test.ts'",
     "clean": "rm -rf dist"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }

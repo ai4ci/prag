@@ -2,7 +2,7 @@
 class: issue
 id: unlink-prune-deletes-shared-pool-rows.md
 title: Unlink and prune delete chunks_pool/vector_pool rows without --gc-chunks, destroying content other projects still reference
-status: open
+status: resolved
 priority: high
 relates-to:
   - feature:git-branch-awareness.md
@@ -74,3 +74,13 @@ manual GC path is the only deletion mechanism. Note the tension: ADR-017 forbids
 *reference counting* as a policy, but a reference **check** at deletion time is
 required by correctness — the fix must avoid counting per row while still refusing
 to delete a referenced hash.
+
+## Resolution (2026-11-02, branch `mvp`)
+Fixed. `_handleUnlink` deletes only `chunk_mapping` + `file_mapping` rows and no longer touches
+either pool — the hash may be referenced by another file, project or branch. `_handlePrune` prunes
+pointer rows only; pool reclamation happens exclusively under `gcChunks`, which now drains the
+ingestion queue, pauses the watcher for the duration, runs `gcUnreferencedChunks()` (full scan of
+`chunks_pool` against a set built from `chunk_mapping`, `chunkHash IN (...)` delete on both pools,
+then `optimize()` on both to actually return the space), and resumes in a `finally`. Acceptance
+grep holds: `grep -n 'chunks_pool").delete' packages/daemon/src/daemon.ts` matches one line, inside
+the GC sweep.

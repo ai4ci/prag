@@ -15,5 +15,8 @@
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
     "tsx": "^4.19.0"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }

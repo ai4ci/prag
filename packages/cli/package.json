@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "bin": {
-    "prag": "./src/main.ts"
+    "prag": "./bin/prag.mjs"
   },
   "scripts": {
     "test": "tsx --test 'test/*.test.ts'"
@@ -16,5 +16,12 @@
   "devDependencies": {
     "tsx": "^4.19.0",
     "typescript": "^7.0.2"
-  }
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "bin",
+    "src"
+  ]
 }

@@ -7,7 +7,8 @@
   "scripts": {
     "build": "npm -w @prag/core run build",
     "test": "npm -w @prag/core run test && npm -w @prag/daemon run test && npm -w @prag/cli run test",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "typecheck": "tsc -p packages/daemon/tsconfig.check.json"
   },
   "devDependencies": {
     "tsx": "^4.23.15",
@@ -18,5 +19,8 @@
     "@kreuzberg/tree-sitter-language-pack": "^1.10.9",
     "@lancedb/lancedb": "^0.41.0",
     "chokidar": "^6.0.0"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }

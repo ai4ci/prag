@@ -9,7 +9,7 @@ relates-to:
 addressed-by:
   - src:daemon/src/daemon.ts#Daemon
   - src:daemon/src/daemon.ts#DaemonConfig
-  - src:daemon/src/daemon.ts#loadConfig
+  - src:daemon/src/main.ts#loadConfig
   - src:daemon/src/daemon.ts#readBody
 tested-by:
   - daemontest:daemon.test.ts#daemonSuite

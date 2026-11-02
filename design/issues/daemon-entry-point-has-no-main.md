@@ -2,7 +2,7 @@
 class: issue
 id: daemon-entry-point-has-no-main.md
 title: packages/daemon has no executable entry point — lazy spawn and prag daemon start can never succeed
-status: open
+status: resolved
 priority: high
 relates-to:
   - feature:dual-interfaces.md
@@ -63,3 +63,17 @@ Blocks `task:test-harness-lifecycle.md`, whose requirements 2 and 3 (managed chi
 stdio, `/health` poll with captured stderr) are unimplementable until something is spawnable.
 Overlaps `issue:no-installation-instructions.md` (packaging, `bin`, `private: true`) — fix the
 entry point first, packaging second.
+
+## Resolution (2026-11-02, branch `mvp`)
+Fixed. `packages/daemon/src/main.ts` is the entry point: `loadConfig()` (PRAG_PORT / PRAG_API_KEY /
+PRAG_EMBEDDING_MODEL / PRAG_WORKER_POOL_SIZE + config.ingestion), `bootstrap()` (provider load,
+vector-unit budget assert, `.embedding-model.json` sidecar mismatch check, schema init),
+`writeRuntimeFiles()` (creates runDir, writes `daemon.port` always and `daemon.token` 0600 when the
+token is the `guest` default), `main()` with SIGINT/SIGTERM drain and a `degraded` daemon on model
+mismatch. `packages/cli/bin/prag.mjs` registers the tsx loader; `packages/daemon/src/index.ts`
+re-exports `loadConfig` from main.ts. Health now reports `version: DAEMON_VERSION` and
+`port: this._boundPort ?? config.port`.
+Acceptance criteria: entry point binds + answers /health (verified by hand and by
+`cli:subprocess-e2e.test.ts`); `prag daemon start`/`stop` work from a clean PRAG_ROOT; the CLI test
+spawns the real entry point; `PRAG_EMBEDDING_MODEL` is asserted through `/health` in the spawned
+process (`fake:8` reported in health).

@@ -40,20 +40,34 @@ Concretely, as of `4906660`:
 This blocks the client SDK work in `feature:client-sdks.md`: "add prag to my
 project" has no answer until there is something to add.
 
+> Status note: partially addressed — see Progress below.
+
 ## Acceptance Criteria
-- README has a **Getting Started** section that takes a reader from a clean
-  machine to a real search result, including OS/Node prerequisites, why native
-  addons are involved, and where data lands by default (`resource:env-and-storage-paths.md`).
-- The command sequence in that section is executed by a test or CI job against a
-  real installed artifact, so the instructions cannot silently rot.
-- `prag` is installable by at least one documented route (global install from a
-  published package, or a packaged single-binary build) and `prag --version`
-  reports the package version.
-- `package.json` files declare `engines`, and an unsupported Node version fails
-  with a message naming the required range instead of a native-addon load error.
-- `@prag/cli` `bin` points at built JavaScript, not a `.ts` source file.
-- First-run behaviour is stated: model download size and how to avoid it
-  (`fake:<dim>`), default port, and where the bearer token comes from.
+- [x] README has a **Getting Started** section that takes a reader from a clean
+      machine to a real search result, including OS/Node prerequisites, why native
+      addons are involved, and where data lands by default (`resource:env-and-storage-paths.md`).
+- [ ] The command sequence in that section is executed by a test or CI job against a real
+      installed artifact. `packages/cli/test/subprocess-e2e.test.ts` now runs the CLI as a child
+      process against a spawned daemon through `packages/cli/bin/prag.mjs` (what
+      `node_modules/.bin/prag` links to), but no CI job runs it — `.github/` is sandbox-protected.
+- [x] `prag` is installable by one documented route (`npm install` -> `node_modules/.bin/prag`, or
+      `npm link` into a user prefix) and `prag --version` reports the package version. Verified by
+      hand: `prag --version` -> `0.1.0`, then daemon start / watch / sync / search-local returned a
+      hit for a file in the watched directory.
+- [x] `package.json` files declare `engines` (`node >= 22`, root and all three packages).
+- [ ] `@prag/cli` `bin` points at built JavaScript, not a `.ts` source file. It now points at
+      `bin/prag.mjs`, which is JavaScript, but that wrapper still executes the TS sources through
+      the tsx loader; a compiled artifact is `task:toolchain-spike-native-addons.md`. Note:
+      `node_modules/.bin/prag` is generated from the lockfile, which is read-only in this sandbox,
+      so the link only refreshes once `npm install` can rewrite `package-lock.json` on the host.
+- [x] First-run behaviour is stated: model download size and how to avoid it (`fake:<dim>`),
+      default port, and where the bearer token comes from.
+
+## Progress (2026-11-02, MVP pass)
+`packages/cli/bin/prag.mjs` is the registered executable entry point, `engines: node >= 22` is
+declared everywhere, `--version`/`--help` work, and README gained a Getting Started section whose
+command sequence was executed by hand from a user npm prefix. Still open: host-side lockfile
+regen for the bin link, CI execution of those commands, and a compiled artifact.
 
 ## Out of Scope
 Binary packaging *choice* (Bun single-file executable vs. published npm package

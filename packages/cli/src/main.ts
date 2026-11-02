@@ -73,9 +73,22 @@ function parseArgs(): Record<string, string[]> {
   return result;
 }
 
+/** Version of the CLI package, read from its own package.json (single source). */
+function cliVersion(): string {
+  const pkg = JSON.parse(
+    readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+  ) as { version?: string };
+  return pkg.version ?? "0.0.0";
+}
+
 export async function main(): Promise<void> {
   const args = process.argv.slice(2);
   if (args.length === 0) usage();
+  if (args[0] === "--version" || args[0] === "-v" || args[0] === "version") {
+    console.log(cliVersion());
+    return;
+  }
+  if (args[0] === "--help" || args[0] === "-h" || args[0] === "help") usage(0);
 
   const cmd = args[0];
   const rest = args.slice(1);

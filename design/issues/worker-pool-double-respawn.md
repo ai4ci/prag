@@ -2,7 +2,7 @@
 class: issue
 id: worker-pool-double-respawn.md
 title: WorkerPool respawns twice per crash and leaves a dead worker index in the idle list, so a request can hang forever
-status: open
+status: resolved
 priority: high
 relates-to:
   - feature:background-worker-queue.md
@@ -66,3 +66,10 @@ is silently never indexed.
 `task:ingestion-worker-pool.md` claims containment works. The unbounded-growth symptom is distinct
 from `issue:file-level-cas-never-written.md` (mapping-row growth) and
 `issue:chunk-pool-disk-usage-growth.md` (pool retention).
+
+## Resolution (2026-11-02, branch `mvp`)
+Fixed in `packages/daemon/src/worker-pool.ts`. Respawn is now guarded so `error` and `exit` cannot
+both fire it (handler checks `if (worker !== entry.worker) return;` and clears the slot before
+spawning), and the pool tracks live workers so a dead one is never dispatched to. `ProcessResult`
+gained `contentHash` (sha256 of raw bytes), which the content-addressable ingestion path needs.
+Covered by `daemontest:worker-pool.test.ts#workerPoolSuite`.

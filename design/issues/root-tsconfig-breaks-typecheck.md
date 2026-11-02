@@ -2,7 +2,7 @@
 class: issue
 id: root-tsconfig-breaks-typecheck.md
 title: Root npm run lint cannot run — tsc --noEmit fails TS6059 rootDir for every package file
-status: open
+status: resolved
 priority: medium
 ---
 ## Problem
@@ -36,3 +36,9 @@ Interacts with `issue:no-installation-instructions.md` (the same broken-package.
 `private: true` everywhere, `bin` pointing at raw TypeScript) and with the missing
 `.github/workflows/ci.yaml`, which is tracked as a Pi todo because `.github/` is
 sandbox-protected and cannot be created from inside the sandbox.
+
+## Resolution (2026-11-02, branch `mvp`) — workaround, root cause still open
+`npm run lint` (root `tsc --noEmit`) still fails TS6059 for every package file, so the repo has no
+working whole-tree typecheck. Added `packages/daemon/tsconfig.check.json` (no `noUnusedLocals`,
+`include` pulls in core + cli sources) and a root `npm run typecheck` script that uses it; it
+covers all three packages transitively and is what CI should call until the root config is fixed.

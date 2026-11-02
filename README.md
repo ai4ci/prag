@@ -27,6 +27,71 @@ prag/
 
 ---
 
+## 🚀 Getting Started
+
+### Prerequisites
+
+- **Node.js ≥ 22** (declared in `engines`). Native addons decide this: LanceDB and the
+  tree-sitter grammars ship prebuilt binaries per Node ABI and platform, so an unsupported
+  Node fails at load with a native-addon error, not a friendly message.
+- **Linux or macOS.** Windows is untested.
+- **Disk/network for the default model.** The default embedder is a local ONNX model
+  (`Xenova/bge-small-en-v1.5`, ~130 MB) downloaded on first real embed and cached in the ONNX
+  runtime's cache, then reused offline. To try prag without any download, set
+  `PRAG_EMBEDDING_MODEL=fake:384` — a deterministic hash-based stand-in. Search quality is
+  meaningless with `fake:`, but the whole pipeline runs.
+
+### Install from source
+
+There is no published package and no single-binary build yet (`task:toolchain-spike-native-addons.md`
+decides which). From a clone:
+
+```bash
+npm install            # native addons unpack here; also links node_modules/.bin/prag
+node_modules/.bin/prag --version
+```
+
+To get `prag` on your PATH, `npm link --workspace @prag/cli` (needs a writable global prefix —
+true under nvm/volta; otherwise `NPM_CONFIG_PREFIX=$HOME/.local/npm-prefix npm link --workspace
+@prag/cli` and add that `bin/` to PATH).
+
+`prag` is `packages/cli/bin/prag.mjs`, a two-line wrapper that registers the `tsx` ESM loader and
+runs the TypeScript sources — the same code path the tests use. A compiled artifact is still open
+work; this is the one route that works today.
+
+### Index something and search it
+
+```bash
+prag daemon start                             # writes runDir/daemon.port (+ daemon.token)
+prag watch ~/code/my-project                  # allow-grant + register as a project
+prag sync                                     # drain the queue; prints flushed/pending counts
+
+cd ~/code/my-project
+prag search-local "how do we retry failed requests"
+```
+
+`watch` uses the directory's `file://` URI as the project id, which is what `search-local`
+resolves your working directory against — so after `cd`, no `-p` is needed.
+
+### Where things live, and how to get an isolated instance
+
+Default root is `$XDG_STATE_HOME`/`$XDG_DATA_HOME`-based (see
+[`design/resources/env-and-storage-paths.md`](design/resources/env-and-storage-paths.md)): the
+LanceDB directory, `runDir/daemon.port`, `runDir/daemon.token` and logs. Set `PRAG_ROOT=/tmp/prag-test`
+for a throwaway instance — everything, including the port file, moves under it.
+
+The bearer token comes from `PRAG_API_KEY`; unset, it defaults to `guest` and prag writes
+`runDir/daemon.token` with mode `0600`. The CLI reads that file, so you rarely handle it.
+
+### Verify your install
+
+```bash
+npm test        # 52 core + 34 daemon + 25 cli, ~30s
+npm run typecheck
+```
+
+---
+
 ## ⚡ Core Architectural Decisions (ADRs)
 
 * **Content-Addressable Storage (CAS):** File contents are parsed and embedded *exactly once* based on their unique cryptographic hash. Git checkouts or branches sharing identical code blocks consume zero extra CPU/GPU cycles and zero duplicate disk footprint.
@@ -54,35 +119,24 @@ prag/
 
 ### Known gaps
 
-Correctness issues first — these can lose data or hang, and none of them are visible from the
-test suite because the suite runs the daemon in-process:
-
-- [ ] `@prag/daemon` has no executable entry point, so `prag daemon start` and lazy startup can
-      never succeed (`issue:daemon-entry-point-has-no-main.md`).
-- [ ] Unlink and prune delete shared `chunks_pool`/`vector_pool` rows without `--gc-chunks`, so
-      removing a file in one project can silently delete content another project still indexes
-      (`issue:unlink-prune-deletes-shared-pool-rows.md`).
-- [ ] `WorkerPool` respawns twice per crash and can dispatch to a dead worker, hanging ingestion
-      forever (`issue:worker-pool-double-respawn.md`).
-- [ ] `file_mapping` is not content-addressable: `contentHash` is written empty, `fileVersionId` is
-      random, and the `upsert*` helpers append, so nothing deduplicates
-      (`issue:file-level-cas-never-written.md`).
-- [ ] `POST /sync` returns before ingestion is written, so indexing cannot be asserted without
-      sleeping (`task:sync-drain-barrier.md`).
-
 Design requirements not yet implemented:
 
-- [ ] Scope search by `projectId`/branch — `hybridSearch()` currently spans every indexed project
-      and every branch (`task:search-project-scoping.md`).
 - [ ] Watcher admission ignores the grants engine; `deny` neither unwatches nor purges
       (`task:project-registry-and-exclusions.md`).
-- [ ] Emit the unified error envelope from the daemon (ADR-022); only the CLI half exists.
-- [ ] Pinned embedding-model detection on `prag reembed` (ADR-015).
-- [ ] Web ingestion: the pluggable fetch-backend interface (ADR-024) and its `plain-fetcher` / Firecrawl / Exa backends.
+- [ ] Emit the unified error envelope from every daemon path (ADR-022); the main failure paths now
+      use it, the rest still return bare text statuses.
+- [ ] Native git branch detection in the CLI and branch-scoped search.
+- [ ] `prag reembed` pinned-model detection (ADR-015) — model mismatch detection and the
+      `.embedding-model.json` sidecar are in place, the reembed sweep is not.
+- [ ] LiteParse PDF/DOCX layout extraction; unsupported documents are refused by extension today.
+- [ ] Web ingestion: the pluggable fetch-backend interface (ADR-024) and its `plain-fetcher` /
+      Firecrawl / Exa backends.
 - [ ] Hardware-acceleration provider selection and local-first enforcement check.
 - [ ] Bun native-addon spike.
-- [ ] No installation instructions and no installable artifact (`issue:no-installation-instructions.md`) — `prag` currently only runs from source via `tsx`.
-- [ ] CI workflow at `.github/workflows/ci.yaml` (sandbox-protected; must be added on the host).
+- [ ] No published package or single-binary artifact — `prag` installs by `npm link` from a clone
+      (`issue:no-installation-instructions.md`).
+- [ ] CI workflow at `.github/workflows/ci.yaml` (sandbox-protected; must be added on the host),
+      which is also what keeps the Getting Started commands from silently rotting.
 
 ---
 
@@ -93,13 +147,14 @@ Design requirements not yet implemented:
 # The daemon lazily auto-spawns on first CLI/MCP use; to start it explicitly:
 prag daemon start
 
-# Then grant it a workspace to watch and index:
+# Then grant it a workspace to watch and index (allow grant + project registration):
 prag watch file:///home/user/projects/my-app
 ```
 
 ### Searching from the CLI
 ```bash
-# The binary auto-detects your active git branch and project context and queries instantly
+# Scoped to the project your working directory belongs to (native git branch
+# detection is not implemented yet — see Known gaps):
 prag search-local "statistical variance check for matrices" --limit 3
 
 # Or search across every registered project:

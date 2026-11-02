@@ -2,7 +2,7 @@
 class: task
 id: search-project-scoping.md
 title: Scope search to a projectId through the daemon and hybridSearch
-status: todo
+status: in_progress
 priority: high
 relates-to:
   - feature:workspace-isolation.md

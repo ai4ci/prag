@@ -15,7 +15,9 @@ import { tmpdir } from "node:os";
 
 const ROOT = join(import.meta.dirname!, "..", "..", "..");
 const DAEMON_ENTRY = join(ROOT, "packages", "daemon", "src", "main.ts");
-const CLI_ENTRY = join(ROOT, "packages", "cli", "src", "main.ts");
+// The installed entry point: node_modules/.bin/prag links to this file, so
+// running it here is the same route an installed `prag` takes.
+const CLI_ENTRY = join(ROOT, "packages", "cli", "bin", "prag.mjs");
 const TOKEN = "subprocess-token";
 
 async function waitForDaemon(port: number, ms = 20_000): Promise<void> {
@@ -40,7 +42,7 @@ async function runPrag(
   env: Record<string, string>,
 ): Promise<{ stdout: string; stderr: string; code: number }> {
   return new Promise((resolve, reject) => {
-    const proc = spawn(process.execPath, ["--import", "tsx", CLI_ENTRY, ...args], {
+    const proc = spawn(process.execPath, [CLI_ENTRY, ...args], {
       env: { ...process.env, ...env },
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -168,6 +170,12 @@ function subprocessEndToEndSuite(): void {
     assert.equal(code, 0, stdout);
     const result = JSON.parse(stdout) as { hits: Array<{ uri: string }>[] };
     assert.ok(result.hits.length > 0, "search-all found nothing");
+  });
+
+  void it("--version reports the package version", async () => {
+    const { stdout, code } = await runPrag(["--version"], ctx.env);
+    assert.equal(code, 0, stdout);
+    assert.match(stdout.trim(), /^\d+\.\d+\.\d+$/, `unexpected: ${stdout}`);
   });
 
   void it("exits with the usage code when a search command has no query", async () => {

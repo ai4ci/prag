@@ -2,7 +2,7 @@
 class: issue
 id: file-level-cas-never-written.md
 title: Ingestion writes a random fileVersionId and empty contentHash, and the upsert helpers append, so nothing is content-addressable or deduplicated
-status: open
+status: resolved
 priority: high
 relates-to:
   - feature:git-branch-awareness.md
@@ -94,3 +94,15 @@ Blocks `task:branch-mapping-and-pruning.md`, whose branch-pointer copy step is m
 until a version id is stable. Distinct from
 `issue:unlink-prune-deletes-shared-pool-rows.md` (deletion of shared rows) — that one is
 about destroying shared content, this one about failing to create the sharing.
+
+## Resolution (2026-11-02, branch `mvp`)
+Fixed. The ingestion worker computes `contentHash = sha256(rawBytes)` and returns it, and
+`_ingestFile` uses it **as** the `fileVersionId`, so an unchanged file re-reported by the watcher
+resolves to the same row: it refreshes `file_mapping.validUntil` and returns without re-embedding.
+When content changes, the superseded version's `file_mapping`/`chunk_mapping` rows are deleted (pool
+rows left for the GC sweep). All seven `upsert*` helpers in `packages/core/src/database.ts` went
+from `table.add(rows)` to `mergeInsert(...).whenNotMatchedInsertAll().whenMatchedUpdateAll()` via a
+local `merge()` helper, so they are idempotent — composite keys: `["projectId","branch","uri"]`,
+`fileVersionId`, `["fileVersionId","chunkIndex"]`, `chunkHash` (insert-only),
+`["chunkHash","unitIndex"]`. Verified against LanceDB 0.41 with a throwaway probe (composite-key
+merge on a single-primaryKey table: 2 rows after 2 merges).

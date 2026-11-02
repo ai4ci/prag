@@ -16,8 +16,8 @@ addressed-by:
   - src:core/src/search.ts#SearchChunkHit
   - src:core/src/search.ts#SearchFileHit
   - src:cli/src/daemon-client.ts#SearchOptions
-  - src:cli/src/daemon-client.ts#SearchHit
-  - src:cli/src/daemon-client.ts#SearchResult
+  - src:cli/src/daemon-client.ts#SearchOptions
+  - src:core/src/search.ts#SearchFileHit
 tested-by:
   - coretest:search.test.ts#searchSuite
 ---
