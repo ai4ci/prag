@@ -1,0 +1,96 @@
+name: CI
+
+# What this checks is deliberately the README's own contract, not a parallel
+# invented one: `npm ci`, `npm run lint`, `npm test`, then the Getting Started
+# commands a reader is told to type. CI that green-lights commands which fail for
+# a user following the docs is worse than no CI -- both the stale test counts in
+# the README and the broken `node_modules/.bin/prag` symlink (fixed in this
+# commit) were invisible to the previous checks.
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      # npm ci, not install: engines.node >= 22 is a native-addon constraint
+      # (LanceDB + tree-sitter prebuilds per Node ABI), so the lockfile must be
+      # the one CI resolves, not a fresh resolution.
+      - run: npm ci
+
+      - name: Typecheck all three packages (src + test)
+        run: npm run lint
+
+      - name: Unit and integration tests
+        run: npm test
+
+      # The README tells readers `npm install` links node_modules/.bin/prag. This
+      # asserts the bin field actually resolves to executable JS: the link used to
+      # point at src/main.ts, which Node cannot load without the tsx loader, so
+      # every documented command died with ERR_MODULE_NOT_FOUND.
+      - name: The documented entry point runs
+        run: node_modules/.bin/prag --version
+
+      # End to end from a shell, not from a test harness: start a daemon, grant a
+      # project, drain, search, stop. fake:384 keeps it offline and deterministic --
+      # the default ONNX embedder downloads 34 MB on first real embed, and CI must
+      # not depend on that (README documents fake: for exactly this).
+      - name: Getting Started works
+        env:
+          PRAG_EMBEDDING_MODEL: fake:384
+        run: |
+          set -euo pipefail
+          export PRAG_ROOT="$RUNNER_TEMP/prag-ci"
+          prag() { node_modules/.bin/prag "$@"; }
+
+          prag daemon start
+          trap 'prag daemon stop || true' EXIT
+          # PRAG_ROOT must actually be in effect: an ignored isolation variable is
+          # how a test run destroys a real index (ADR-019).
+          prag status | grep -q "$PRAG_ROOT" || {
+            echo "prag status did not report PRAG_ROOT"; exit 1; }
+
+          prag watch "$GITHUB_WORKSPACE/packages/core"
+          prag sync
+
+          # A corpus this size must yield results; zero hits means the pipeline
+          # ran without indexing anything, which is the failure mode a green
+          # "exit 0" would otherwise hide.
+          out=$(prag search-local "search fusion ranking" -n 3)
+          echo "$out"
+          echo "$out" | grep -q "Hit 1" || { echo "no results from a 27-file corpus"; exit 1; }
+
+  # The default embedder is a real 34 MB download from Hugging Face, so a plain
+  # unit-test pass never exercises ONNX. Kept separate and continue-on-error:
+  # this proves the default configuration works, and a Hugging Face outage must
+  # not block unrelated merges.
+  onnx-default-model:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - name: Index and search with the default ONNX embedder
+        env:
+          PRAG_ROOT: ${{ runner.temp }}/prag-onnx
+        run: |
+          set -euo pipefail
+          prag() { node_modules/.bin/prag "$@"; }
+          prag daemon start
+          trap 'prag daemon stop || true' EXIT
+          prag watch "$GITHUB_WORKSPACE/packages/core"
+          prag sync
+          prag search-local "how does the vector pool deduplicate content" -n 3

@@ -354,7 +354,9 @@ export async function main(): Promise<void> {
 
   if (cmd === "status") {
     const h = await daemonClient.checkHealth();
-    const uri = rest[0];
+    // positional(), not rest[0]: `prag status --json` read "--json" as the URI and
+    // printed a status line for a URI nobody typed.
+    const uri = positional(rest)[0];
     if (uri) {
       console.log(`Status for ${normalizeUri(uri)}:`);
       console.log(`Daemon: running (PID ${h.pid})`);
@@ -427,7 +429,7 @@ export async function main(): Promise<void> {
   }
 
   if (cmd === "pause") {
-    const projectId = rest[0];
+    const projectId = positional(rest)[0];
     if (!projectId) { console.error("pause requires a project ID"); usage(ExitCode.USAGE); }
     await daemonClient.pause(projectId);
     console.log(`Paused ${projectId}`);
@@ -435,7 +437,7 @@ export async function main(): Promise<void> {
   }
 
   if (cmd === "resume") {
-    const projectId = rest[0];
+    const projectId = positional(rest)[0];
     if (!projectId) { console.error("resume requires a project ID"); usage(ExitCode.USAGE); }
     await daemonClient.resume(projectId);
     console.log(`Resumed ${projectId}`);
