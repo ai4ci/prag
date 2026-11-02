@@ -77,6 +77,61 @@ function testHarnessSuite(): void {
     assert.equal(existsSync(root), false, "root should be cleaned up after crash");
   });
 
+
+  void it("does not touch process.env, so concurrent harnesses cannot collide", async () => {
+    // The harness used to set PRAG_ROOT, await daemon.start() -- which yields --
+    // and restore afterwards, so two overlapping starts could restore over each
+    // other. ADR-019 requires the harness be safe to run concurrently, and
+    // process.env is shared global state.
+    const before = process.env.PRAG_ROOT;
+    const sentinel = "/nonexistent/sentinel-root";
+    process.env.PRAG_ROOT = sentinel;
+    try {
+      const inst = await startTestDaemon();
+      try {
+        assert.equal(process.env.PRAG_ROOT, sentinel,
+          "the harness mutated PRAG_ROOT instead of passing paths explicitly");
+        assert.notEqual(inst.root, sentinel);
+        // ...and the daemon is rooted where the harness says, not at the sentinel.
+        const health = await (await fetch(`${inst.baseUrl}/health`)).json() as { root: string };
+        assert.equal(health.root, inst.root);
+      } finally {
+        await stopTestDaemon(inst);
+      }
+    } finally {
+      if (before === undefined) delete process.env.PRAG_ROOT;
+      else process.env.PRAG_ROOT = before;
+    }
+  });
+
+  void it("starts several harnesses concurrently without crossing roots", async () => {
+    const insts = await Promise.all([startTestDaemon(), startTestDaemon(), startTestDaemon()]);
+    try {
+      const roots = insts.map((i) => i.root);
+      assert.equal(new Set(roots).size, 3, "two harnesses shared a root");
+      assert.equal(new Set(insts.map((i) => i.port)).size, 3, "two harnesses shared a port");
+      for (const inst of insts) {
+        const health = await (await fetch(`${inst.baseUrl}/health`)).json() as { root: string };
+        assert.equal(health.root, inst.root, "a daemon is serving another harness's root");
+      }
+    } finally {
+      await Promise.all(insts.map(stopTestDaemon));
+    }
+  });
+
+  void it("returns a daemon that is already answering /health", async () => {
+    // No poll in the test: the harness owns readiness, so the first request a
+    // test makes must not be a race.
+    const inst = await startTestDaemon();
+    try {
+      const res = await fetch(`${inst.baseUrl}/health`);
+      assert.equal(res.status, 200);
+      assert.equal(((await res.json()) as { status: string }).status, "ok");
+    } finally {
+      await stopTestDaemon(inst);
+    }
+  });
+
   void it("builds git fixtures into root", async () => {
     const inst = await startTestDaemon({ withFixtures: true });
 

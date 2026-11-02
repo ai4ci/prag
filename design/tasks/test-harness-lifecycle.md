@@ -33,26 +33,48 @@ Provide the shared setup/teardown harness every test suite uses, plus the two da
 
 ## Implementation status
 
-Re-audited 2026-11-02. Still `in_progress`: the harness works and every suite depends
-on it, but it is not the harness the design describes.
+Still `in_progress`. Updated 2026-11-02.
 
 - **`daemon.port` file — DONE.** Written by `writeRuntimeFiles()`
-  (`daemon/src/main.ts:275`), and the CLI reads the daemon's port with the
-  documented precedence (`PRAG_PORT` → `server.port` → 7724).
-- **`PRAG_NO_SPAWN` — DONE.** Honoured by the CLI, and
-  `cli/test/subprocess-e2e.test.ts` drives a real spawned daemon through it.
+  (`daemon/src/main.ts:275`); the CLI reads the port with the documented
+  precedence (`PRAG_PORT` -> `server.port` -> 7724).
+- **`PRAG_NO_SPAWN` — DONE.** Honoured by the CLI and exercised against a real
+  spawned daemon in `clitest:subprocess-e2e.test.ts`.
+- **Readiness poll — DONE.** `startTestDaemon` polls `GET /health` until the
+  daemon answers `ok`, with a bounded timeout whose failure names the last
+  response. A test's first request is no longer a race.
+- **Root assertion — DONE.** The harness refuses to return a daemon whose
+  `health.root` is not the temp root, and takes it down on the way out. This is
+  requirement 4 and the reason it exists: a test that proceeds against a real
+  `~/.local/share/prag` can delete the developer's index.
+- **Concurrency safety — DONE.** Paths are passed explicitly through
+  `DaemonConfig.paths` instead of `process.env.PRAG_ROOT`. The previous version
+  set the variable, awaited `daemon.start()` (which yields) and restored
+  afterwards, so two overlapping starts could restore over each other --
+  `process.env` is exactly the "global state between instances" the
+  requirement forbids.
 
 Outstanding:
 
-- **Managed child with piped stdio — MISSING.** `startTestDaemon` constructs
-  `new Daemon(...)` in-process (`test-harness.ts:73`). Its own comment ("no CLI
-  entry point exists yet") is stale — `prag daemon start` works. In-process is
-  partly deliberate here: the sandbox isolates subprocess networking, which is
-  why `subprocess-e2e.test.ts` is the single exception and needs a forwarded
-  port. Revisit together with that constraint rather than in isolation.
-- **No readiness poll or root assertion inside the harness — MISSING.** The
-  requirement is that the harness itself aborts loudly when `health.root` is not
-  the temp root, since the next call may be destructive.
-- **Environment contract unmet.** The harness sets `PRAG_ROOT` only; the design
-  calls for `PRAG_PORT=0`, `PRAG_NO_SPAWN=1`, `PRAG_EMBEDDING_MODEL=fake:384`
-  and `PRAG_DEBOUNCE_MS=0` unless a test overrides them.
+- **Managed child with piped stdio — MISSING, and environment-constrained.**
+  `startTestDaemon` still constructs `new Daemon(...)` in-process. The stale
+  reason ("no CLI entry point exists yet") is gone -- `prag daemon start`
+  works -- but a real constraint replaced it: this project is developed in a
+  sandbox that isolates subprocess networking, which is why
+  `clitest:subprocess-e2e.test.ts` is the single spawning test and needs a
+  forwarded port. Switching the default harness to spawning would break the
+  suite in that environment. The realistic shape is an opt-in spawn mode, kept
+  green in CI, with in-process as the default; that is a decision about how the
+  project is developed, not a refactor, so it is recorded rather than taken.
+- **Environment contract — PARTIAL.** The daemon is configured directly
+  (root, port, token, `fake:<dim>` embedder), which is stronger than setting
+  environment variables for an in-process daemon. The variables the
+  requirement lists (`PRAG_PORT=0`, `PRAG_NO_SPAWN=1`,
+  `PRAG_EMBEDDING_MODEL=fake:384`, `PRAG_DEBOUNCE_MS=0`) only become meaningful
+  once there is a child process to set them for, so this closes with the item
+  above.
+
+See `issue:daemon-suite-flaky-under-parallel-execution.md`: the intermittent
+file-level failures that prompted this work were a Node bug
+(nodejs/node#63323, fixed in 24.19.0), not a harness defect. The harness was
+suspected and exonerated.
