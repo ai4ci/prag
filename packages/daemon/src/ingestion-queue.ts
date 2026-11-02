@@ -60,10 +60,25 @@ export interface IngestionStats {
 
 // ── IngestionQueue ────────────────────────────────────────────────────
 
+/**
+ * Queue identity of a file *within a project*. The same path watched by two
+ * projects is two pieces of work, not one.
+ */
+function queueKey(projectId: string, uri: string): string {
+  return `${projectId}\0${uri}`;
+}
+
 export class IngestionQueue {
   private watchers = new Map<string, FSWatcher>();
-  private dirty = new Map<string, IngestionQueueItem>(); // uri → latest event
-  private cooldowns = new Map<string, ReturnType<typeof setTimeout>>(); // uri → timer
+  // Keyed by `${projectId}\0${uri}`, not by uri alone. Two projects may hold
+  // the same path (overlapping watch roots), and a uri-only key let the second
+  // project's event silently overwrite the first's: one ingestion happened and
+  // the owning projectId was whichever watcher reported last
+  // (issue:ingestion-dirty-set-keyed-by-uri-alone.md). Dedup of identical
+  // content belongs in chunks_pool, on content hash (ADR-002), where it is
+  // deliberate -- not in the queue's bookkeeping, where it is invisible.
+  private dirty = new Map<string, IngestionQueueItem>(); // (projectId, uri) → latest event
+  private cooldowns = new Map<string, ReturnType<typeof setTimeout>>(); // (projectId, uri) → timer
   private skipCounters = new Map<string, Record<string, number>>();
   private readyPromises = new Map<string, Promise<void>>();
   /** Registered root per project, for the pre-drain reconciliation walk. */
@@ -449,16 +464,16 @@ export class IngestionQueue {
     // reconciles it; reporting it as pending is what pendingCount() still does.
     if (this._closing) return;
     const uri = resolve(filePath);
-    const existing = this.dirty.get(uri);
+    const key = queueKey(projectId, uri);
 
     // Update dirty set with latest event type
-    this.dirty.set(uri, { projectId, uri, eventType });
+    this.dirty.set(key, { projectId, uri, eventType });
 
     // If already on cooldown, just update the dirty set
-    if (this.cooldowns.has(uri)) return;
+    if (this.cooldowns.has(key)) return;
 
     // Start cooldown timer
-    this._startCooldown(uri, projectId);
+    this._startCooldown(key, uri, projectId);
   }
 
   private _onUnlink(projectId: string, filePath: string): void {
@@ -468,15 +483,16 @@ export class IngestionQueue {
       return;
     }
     const uri = resolve(filePath);
+    const key = queueKey(projectId, uri);
 
     // Cancel any pending cooldown
-    const timer = this.cooldowns.get(uri);
+    const timer = this.cooldowns.get(key);
     if (timer) {
       clearTimeout(timer);
-      this.cooldowns.delete(uri);
+      this.cooldowns.delete(key);
     }
 
-    this.dirty.delete(uri);
+    this.dirty.delete(key);
 
     // Notify: process unlink immediately
     this._dispatch(
@@ -501,15 +517,15 @@ export class IngestionQueue {
     }
   }
 
-  private _startCooldown(uri: string, projectId: string): void {
+  private _startCooldown(key: string, uri: string, projectId: string): void {
     const timer = setTimeout(() => {
-      this.cooldowns.delete(uri);
+      this.cooldowns.delete(key);
 
       // Check if file is still dirty
-      const item = this.dirty.get(uri);
+      const item = this.dirty.get(key);
       if (!item) return;
 
-      this.dirty.delete(uri);
+      this.dirty.delete(key);
 
       // Apply discovery filters before dispatching
       this._checkFile(uri, item.projectId).then((pass) => {
@@ -524,7 +540,7 @@ export class IngestionQueue {
       });
     }, this.projectCooldownMs.get(projectId) ?? this.config.cooldownMs);
 
-    this.cooldowns.set(uri, timer);
+    this.cooldowns.set(key, timer);
   }
 
   /**
@@ -563,16 +579,17 @@ export class IngestionQueue {
     // Trust the disk, not event delivery (see _reconcile).
     await this._reconcile(projectId);
 
-    for (const [uri, timer] of this.cooldowns) {
-      if (projectId && this.dirty.get(uri)?.projectId !== projectId) continue;
+    for (const [key, timer] of this.cooldowns) {
+      if (projectId && this.dirty.get(key)?.projectId !== projectId) continue;
       clearTimeout(timer);
-      this.cooldowns.delete(uri);
+      this.cooldowns.delete(key);
     }
 
-    const items = Array.from(this.dirty.values()).filter(
-      (item) => !projectId || item.projectId === projectId,
+    const entries = [...this.dirty.entries()].filter(
+      ([, item]) => !projectId || item.projectId === projectId,
     );
-    for (const item of items) this.dirty.delete(item.uri);
+    for (const [key] of entries) this.dirty.delete(key);
+    const items = entries.map(([, item]) => item);
 
     let dispatched = 0;
     for (const item of items) {

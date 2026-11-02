@@ -584,7 +584,16 @@ export class Daemon {
       vectors.push(...(await this.embedder.embedBatch(flat.slice(i, i + batchSize))));
     }
 
-    const fileVersionId = contentHash;
+    // `${uri}::${contentHash}`, per storage-schema.md:128 -- NOT the content
+    // hash alone. A file version is a version *of a path*: using the hash by
+    // itself gave two projects holding byte-identical files the same primary
+    // key, and `upsertFileMapping` merges on it, so ingesting the second
+    // deleted the first. `corpus/alpha/src/shared.ts` and
+    // `corpus/beta/src/shared.ts` are byte-identical precisely to exercise this
+    // (test/fixtures/README.md), and alpha's copy vanished from its own index.
+    // Content-level dedup still happens, in chunks_pool on chunkHash (ADR-002),
+    // which is where it is deliberate.
+    const fileVersionId = `${uri}::${contentHash}`;
     const cmRows: Array<{ fileVersionId: string; chunkIndex: number; chunkHash: string }> = [];
     const cpRows: Array<{ chunkHash: string; text: string; scopeContext: string | null }> = [];
     const vpRows: Array<{ chunkHash: string; unitIndex: number; vector: Float32Array }> = [];

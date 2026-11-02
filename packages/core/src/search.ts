@@ -292,17 +292,28 @@ async function mapToFiles(
 
   // Batch lookup: get fileVersionId for each chunkHash
   const chunkHashes = chunks.map((c) => c.chunkHash);
-  const chunkRows = await chunkMapping
-    .query()
-    .where(
-      `chunkHash IN (${chunkHashes.map((h) => `'${h}'`).join(",")})`,
-    )
-    .limit(chunkHashes.length)
-    .toArray();
+  // Paged, not `.limit(chunkHashes.length)`: chunk_mapping is many-to-one on
+  // chunkHash by design — the pool is content-addressed (ADR-002), so one chunk
+  // shared by N files has N rows. A 1:1 limit truncated that fan-out, and
+  // whichever rows came back first won: two projects holding byte-identical
+  // files meant only one of them could ever appear in results.
+  const where = `chunkHash IN (${chunkHashes.map((h) => `'${h}'`).join(",")})`;
+  const chunkRows: Array<Record<string, unknown>> = [];
+  const page = Math.max(chunkHashes.length, 1) * 8;
+  for (let offset = 0; ; offset += page) {
+    const batch = (await chunkMapping
+      .query()
+      .where(where)
+      .limit(page)
+      .offset(offset)
+      .toArray()) as Array<Record<string, unknown>>;
+    chunkRows.push(...batch);
+    if (batch.length < page) break;
+  }
 
   // Group chunks by fileVersionId
   const fileChunks = new Map<string, SearchChunkHit[]>();
-  for (const row of chunkRows as Array<Record<string, unknown>>) {
+  for (const row of chunkRows) {
     const fvid = row.fileVersionId as string;
     const ch = row.chunkHash as string;
     const chunk = chunks.find((c) => c.chunkHash === ch);
