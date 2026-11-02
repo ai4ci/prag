@@ -93,6 +93,28 @@ loom link feature:git-branch-awareness.md implemented-by src:core/src/database/s
 loom link task:core-database-schemas.md addressed-by src:core/src/database/schema.ts#chunksPool
 ```
 
+## 2b. Status Honesty
+
+`status: done` on a task is a **claim about code**, not about intent, and the graph
+is what implementers trust. Before setting `done`, walk every requirement line and
+name the file:line that satisfies it; if a line cannot be cited, the task is
+`in_progress`, not `done`. The same test applies to a feature's `completed`.
+
+Two failure modes found in this repo, both worth guarding against:
+
+- **Endpoint exists != requirement met.** Registering `POST /sync`, or an MCP tool
+  that accepts a `projectId`, satisfies the prose an implementer skims while leaving
+  the actual guarantee (a drain barrier, a query filter) unimplemented. Read the
+  handler, not the route table.
+- **Tests that sleep are not evidence.** A suite that passes because of
+  `await sleep(1500)` before an assertion proves timing, not behaviour. When a task's
+  Verification section says "no sleeps", a sleep anywhere in the covering test means
+  the requirement is unmet.
+
+When reverting an over-claimed task, say why in the commit message and record the
+missing behaviour as an `issue` if it is a defect (data loss, silent wrong answer)
+rather than leaving it as an unmet line inside a task.
+
 ## 3. Lifecycle Transition Rules
 
 ### Moving a Task to `in_progress`

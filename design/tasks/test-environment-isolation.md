@@ -2,7 +2,7 @@
 class: task
 id: test-environment-isolation.md
 title: Implement PRAG_ROOT isolation and assertable resolved paths
-status: done
+status: in_progress
 priority: high
 relates-to:
   - feature:test-harness-and-fixtures.md
@@ -36,3 +36,28 @@ This blocks every other test task. Until it exists, any test that reaches `prag 
 - With `PRAG_ROOT=<tmp>` and `PRAG_DATA_DIR=<other>` both set, data lands in `<other>` and config/state/logs land under `<tmp>`.
 - `GET /health` reports `root` equal to `<tmp>`.
 - Deleting `<tmp>` removes every trace of the instance.
+
+## Implementation status
+
+Reverted from `done`: path resolution is complete and tested, directory creation and
+the destructive-verification cycle are not.
+
+- **Create directories on demand — MISSING.** `grep -rn "mkdir" packages/*/src/` → 0
+  matches. The daemon never writes `daemon.token` either (`grep -rn "writeFileSync"|"daemon.token"
+  packages/daemon/src/` → 0 matches), so the `0600` requirement is unenforced: the only
+  `0600` write in the repo is `prag daemon token` (`packages/cli/src/main.ts:136-138`),
+  which throws if `runDir` does not already exist.
+- **Verification under-tested.** The no-XDG test (`packages/daemon/test/daemon-isolation.test.ts:66-97`)
+  snapshots 2 of 3 XDG roots and issues a single `GET /projects` — no index-and-search
+  cycle, so the requirement's own wording ("during a full index-and-search cycle") is
+  not exercised. The `PRAG_ROOT`+`PRAG_DATA_DIR` precedence case is checked at
+  path-resolution level only (`packages/core/test/paths.test.ts:63-71`), never by
+  observing where data lands.
+
+Satisfied: `PRAG_ROOT` derivation (`packages/core/src/paths.ts:62-69`), precedence with
+no XDG fallback (`paths.ts:71-78`, tested `paths.test.ts:63-107`), the four `/health`
+path fields (`packages/daemon/src/daemon.ts:333-336`, asserted
+`daemon-isolation.test.ts:50-56`), and the `env-and-storage-paths.md` update.
+
+Remaining: `mkdir -p` the derived dirs at path-resolution time with `daemon.token` at
+`0600`; extend the isolation test to a real index+search cycle over all three XDG roots.

@@ -457,4 +457,11 @@ The daemon exposes an internal REST/JSON API strictly bound to `127.0.0.1:<port>
 | `POST` | `/sync` | Drain barrier: force reconciliation and flush | Body: `{ projectId?: string }` $\to$ Returns once the queue is empty and all writes are committed: `{ synced: true, flushedFiles: number, pendingFiles: number }` |
 | `POST` | `/prune` | Run branch pruning & GC | Body: `{ gcChunks?: boolean }` (default `false`) $\to$ Returns: `{ prunedBranches: number, purgedChunks: number }` |
 | `POST` | `/reembed` | Drop content tables and requeue a full rebuild under a new model | Body: `{ model?: string }` $\to$ Returns immediately: `{ requeued: number }` (projects enqueued) |
+| `POST` | `/grants/evaluate` | Dry-run the grant engine | Body: `{ uri: string }` $	o$ Returns: `GrantEvaluation` (which rule matched, resulting action) without mutating grants |
+| `POST` | `/pause` | Pause a project | Body: `{ projectId: string }` $	o$ Sets `projects.status = 'paused'`; grants and indexed data are kept, scanning and ingestion stop |
+| `POST` | `/resume` | Resume a paused project | Body: `{ projectId: string }` $	o$ Restores `projects.status = 'active'` and re-enables scanning without re-indexing current files |
 | `POST` | `/shutdown`| Graceful daemon exit | Flushes queues and terminates process cleanly. |
+
+`GET /projects` returns each project's per-scan skip counters (`tooLarge`, `binary`,
+`denied`) alongside its status, so `prag status` can distinguish a deliberate exclusion
+from a bug (ADR-023). Counters are in-memory and are not part of the `projects` schema.

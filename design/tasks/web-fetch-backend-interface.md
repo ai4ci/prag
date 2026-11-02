@@ -25,6 +25,10 @@ built-ins and capability reporting, so ingestion code never names a vendor.
 - Select exactly one ingestion backend from `web.backend`; a misconfigured or
   unknown id fails at startup with a named error listing the available backends —
   it never silently falls back (ADR-024).
+- Extend `PragConfig` in `packages/core/src/paths.ts` with the `web` block
+  (`backend`, `firecrawl.url`, `firecrawl.apiKey`, `exa.apiKey`) — the interface
+  currently has no `web` key at all (`packages/core/src/paths.ts:88-117`), and
+  `loadPragConfig` is the single place config.json is read.
 - Reject a grant that needs a capability the backend lacks with
   `CRAWL_CAPABILITY_UNAVAILABLE`. The error names the missing capability and which
   configured backends provide it, and its `remedy` tells the user to register the
