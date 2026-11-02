@@ -2,7 +2,7 @@
 class: feature
 id: workspace-isolation.md
 title: Multi-Project Multi-Tenant Isolation
-status: accepted
+status: in_progress
 priority: medium
 area: ingestion
 implemented-by:

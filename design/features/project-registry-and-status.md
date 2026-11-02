@@ -2,7 +2,7 @@
 class: feature
 id: project-registry-and-status.md
 title: Unified Allow/Deny URI Grants and Database-Backed Project Discovery
-status: accepted
+status: in_progress
 priority: high
 area: daemon
 guided-by:

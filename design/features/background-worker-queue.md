@@ -2,7 +2,7 @@
 class: feature
 id: background-worker-queue.md
 title: Non-Blocking Background Worker Ingestion Queue
-status: accepted
+status: in_progress
 priority: high
 area: daemon
 guided-by:

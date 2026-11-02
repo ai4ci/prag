@@ -2,7 +2,7 @@
 class: feature
 id: air-gapped-runtime.md
 title: Air-Gapped Local Runtime and Hardware Acceleration
-status: accepted
+status: in_progress
 priority: high
 area: core
 guided-by:

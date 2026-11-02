@@ -2,7 +2,7 @@
 class: feature
 id: git-branch-awareness.md
 title: Git Branch Awareness and State Continuity
-status: accepted
+status: in_progress
 priority: high
 area: storage
 guided-by:

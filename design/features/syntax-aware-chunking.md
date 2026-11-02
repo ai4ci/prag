@@ -2,7 +2,7 @@
 class: feature
 id: syntax-aware-chunking.md
 title: Syntax-Aware Structural Code Chunking and Whitespace Normalization
-status: accepted
+status: in_progress
 priority: high
 area: ingestion
 guided-by:

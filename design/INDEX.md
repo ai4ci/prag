@@ -7,9 +7,18 @@ title: prag Design & Architecture Index
 
 Overview of architectural decisions, features, and engineering tasks for `prag` (**Pragmatic RAG**).
 
-## Features Summary
+## Feature Progress
 
-<!-- loom view: feature_list -->
+### Completed
+
+<!-- loom view: completed_feature_list -->
+
+_(no results)_
+<!-- loom view: completed_feature_list end -->
+
+### In progress
+
+<!-- loom view: in_progress_feature_list -->
 
 - [Air-Gapped Local Runtime and Hardware Acceleration](features/air-gapped-runtime.md)
 - [Non-Blocking Background Worker Ingestion Queue](features/background-worker-queue.md)
@@ -19,10 +28,23 @@ Overview of architectural decisions, features, and engineering tasks for `prag` 
 - [Unified Allow/Deny URI Grants and Database-Backed Project Discovery](features/project-registry-and-status.md)
 - [Syntax-Aware Structural Code Chunking and Whitespace Normalization](features/syntax-aware-chunking.md)
 - [Test Harness, Environment Isolation, and Fixture Corpus](features/test-harness-and-fixtures.md)
+- [Multi-Project Multi-Tenant Isolation](features/workspace-isolation.md)
+<!-- loom view: in_progress_feature_list end -->
+
+### Accepted — implementation not started
+
+<!-- loom view: accepted_feature_list -->
+
 - [Layout-Preserving Document Chunking](features/layout-preserving-chunking.md)
 - [Non-Local Content and Web URI Ingestion (Firecrawl)](features/web-and-nonlocal-content.md)
-- [Multi-Project Multi-Tenant Isolation](features/workspace-isolation.md)
-<!-- loom view: feature_list end -->
+<!-- loom view: accepted_feature_list end -->
+
+### Draft
+
+<!-- loom view: draft_feature_list -->
+
+_(no results)_
+<!-- loom view: draft_feature_list end -->
 
 # Open Issues
 
@@ -66,28 +88,13 @@ Overview of architectural decisions, features, and engineering tasks for `prag` 
 
 <!-- loom view: task_list -->
 
-- [Implement PRAG_ROOT isolation and assertable resolved paths](tasks/test-environment-isolation.md)
 - [Implement branch_mapping table schema and branch pruning lifecycle](tasks/branch-mapping-and-pruning.md)
-- [Implement short-lived CLI client with lazy daemon spawning and HTTP queries](tasks/cli-read-only-search.md)
-- [Define LanceDB database schemas and interfaces in @prag/core](tasks/core-database-schemas.md)
-- [Implement daemon local loopback HTTP server and lifecycle management](tasks/daemon-http-server-and-lifecycle.md)
-- [Spike native addon support under Bun (LanceDB, ONNX, Tree-sitter)](tasks/toolchain-spike-native-addons.md)
-- [Implement test harness setup/teardown with ephemeral port and no-spawn mode](tasks/test-harness-lifecycle.md)
-- [Implement injectable fake embedding provider (fake:<dim>)](tasks/deterministic-embedding-provider.md)
-- [Maintain the test fixture corpus and git fixture builder](tasks/test-fixture-corpus.md)
 - [Implement the unified error envelope, status mapping and exit codes](tasks/error-contract.md)
-- [Implement hybrid search with LanceDB BM25 FTS and Reciprocal Rank Fusion](tasks/hybrid-search-rrf.md)
-- [Implement discovery filters, skip reporting and watch admission control](tasks/ingestion-limits-and-admission.md)
-- [Implement the ingestion worker pool with main-thread embedding and writes](tasks/ingestion-worker-pool.md)
-- [Implement LanceDB initialization scripts with 7-table schema setup](tasks/lancedb-init-scripts.md)
-- [Implement grants and projects tables with allow/deny evaluation and Chokidar filter integration](tasks/project-registry-and-exclusions.md)
-- [Make POST /sync a true drain barrier](tasks/sync-drain-barrier.md)
+- [Spike native addon support under Bun (LanceDB, ONNX, Tree-sitter)](tasks/toolchain-spike-native-addons.md)
 - [Implement hardware acceleration provider selection and air-gap enforcement](tasks/air-gap-hardware-provider.md)
-- [Expose native HTTP/SSE Model Context Protocol (MCP) server endpoint in daemon](tasks/mcp-server-endpoint.md)
-- [Implement LiteParse layout-preserving PDF/DOCX to Markdown pipeline](tasks/liteparse-document-pipeline.md)
 - [Build Tree-sitter and LiteParse parser routing in @prag/daemon](tasks/daemon-parser-router.md)
 - [Implement pinned embedding model detection and prag reembed rebuild](tasks/embedding-model-migration.md)
-- [Construct thread-safe background queue with Chokidar debouncing](tasks/daemon-ingestion-queue.md)
+- [Implement LiteParse layout-preserving PDF/DOCX to Markdown pipeline](tasks/liteparse-document-pipeline.md)
 - [Implement Firecrawl-backed web ingestion with self-hosted endpoint support](tasks/web-ingestion-pipeline.md)
 - [Enforce project-scoped query and storage isolation across workspaces](tasks/workspace-isolation-enforcement.md)
 <!-- loom view: task_list end -->

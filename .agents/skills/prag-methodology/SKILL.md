@@ -19,6 +19,7 @@ rejected with `model/path-removed`). URIs are **curies** — `feature:x.md`, not
 - **`feature`**: `feature:<slug>.md` -> `design/features/<slug>.md`
   - Defines product and architectural capabilities, system requirements, and interface boundaries.
   - Attributes: `title`, `status` (`draft` | `accepted` | `in_progress` | `completed`), `priority` (`low` | `medium` | `high`), `area` (`core` | `daemon` | `storage` | `ingestion` | `interface`).
+  - Lifecycle: `draft` = requirements still being specified; `accepted` = scope approved, implementation not started; `in_progress` = implementation started but scope incomplete; `completed` = scoped requirements implemented and tested. Keep a feature `in_progress` while any explicit requirement remains unmet; related task completion alone does not complete the feature.
 - **`task`**: `task:<slug>.md` -> `design/tasks/<slug>.md`
   - Actionable engineering work items to be implemented by contributors/agents.
   - Attributes: `title`, `status` (`todo` | `in_progress` | `done` | `blocked`), `priority` (`low` | `medium` | `high`).

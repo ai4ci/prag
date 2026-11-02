@@ -2,7 +2,7 @@
 class: feature
 id: multi-format-parsing.md
 title: Multi-Format Code and Document Parsing
-status: accepted
+status: in_progress
 priority: high
 area: ingestion
 guided-by:

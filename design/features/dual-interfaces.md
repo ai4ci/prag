@@ -2,7 +2,7 @@
 class: feature
 id: dual-interfaces.md
 title: Dual Interface (Short-Lived CLI and Native HTTP/SSE MCP Endpoint)
-status: accepted
+status: in_progress
 priority: high
 area: interface
 guided-by:

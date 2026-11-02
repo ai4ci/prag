@@ -2,7 +2,7 @@
 class: feature
 id: test-harness-and-fixtures.md
 title: Test Harness, Environment Isolation, and Fixture Corpus
-status: accepted
+status: in_progress
 priority: high
 area: core
 guided-by:

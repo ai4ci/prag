@@ -9,7 +9,9 @@
 %% @prefix resource: <repo:design/resources/> .
 
 classDiagram
-    %% Core lifecycle status for features from conception to completion
+    %% Feature lifecycle: draft = still being specified; accepted = approved scope,
+    %% implementation not started; in_progress = implementation begun but scope
+    %% remains; completed = scoped requirements are implemented and tested.
     class FeatureStatus {
         <<enumeration>>
         draft
@@ -109,9 +111,28 @@ classDiagram
     test <|-- daemontest
     test <|-- clitest
 
-    %% @view feature_list
+    %% @view completed_feature_list
     %% SELECT uri
     %% FROM feature
+    %% WHERE status='completed'
+    %% ORDER BY priority DESC
+
+    %% @view in_progress_feature_list
+    %% SELECT uri
+    %% FROM feature
+    %% WHERE status='in_progress'
+    %% ORDER BY priority DESC
+
+    %% @view accepted_feature_list
+    %% SELECT uri
+    %% FROM feature
+    %% WHERE status='accepted'
+    %% ORDER BY priority DESC
+
+    %% @view draft_feature_list
+    %% SELECT uri
+    %% FROM feature
+    %% WHERE status='draft'
     %% ORDER BY priority DESC
 
     %% @view adr_list
@@ -127,4 +148,5 @@ classDiagram
     %% @view task_list
     %% SELECT uri
     %% FROM task
+    %% WHERE NOT status='done'
     %% ORDER BY priority DESC
