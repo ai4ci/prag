@@ -214,6 +214,18 @@ export async function main(): Promise<void> {
       // search-all: no project scoping
     } else {
       projectId = flagProject || (await daemonClient.inferProjectId()) || undefined;
+      if (!projectId) {
+        // ADR-018: "a search_local call without projectId is an error, never a
+        // silent widening of scope." Sending undefined here used to search the
+        // whole index from outside any project, which is the one thing the
+        // command promises not to do.
+        throw new DaemonError(
+          "PROJECT_ID_REQUIRED",
+          `No registered project contains ${process.cwd()}`,
+          "Run prag watch <dir> first, pass --project <id>, use search-all to " +
+            "search every project, or see registered ids with prag projects.",
+        );
+      }
     }
 
     // Branch context resolves on the client (cli-and-mcp-interface.md): the CLI has

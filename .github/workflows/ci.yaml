@@ -65,9 +65,18 @@ jobs:
           # A corpus this size must yield results; zero hits means the pipeline
           # ran without indexing anything, which is the failure mode a green
           # "exit 0" would otherwise hide.
-          out=$(prag search-local "search fusion ranking" -n 3)
+          # The watched project is packages/core, so the search runs from inside it:
+          # search-local resolves its projectId from the cwd and refuses to widen to
+          # the whole index from outside a registered project (ADR-018).
+          out=$(cd "$GITHUB_WORKSPACE/packages/core" && prag search-local "search fusion ranking" -n 3)
           echo "$out"
           echo "$out" | grep -q "Hit 1" || { echo "no results from a 27-file corpus"; exit 1; }
+
+          # The other half of that contract: from a directory inside no project, it
+          # must fail rather than quietly search everything.
+          if (cd "$GITHUB_WORKSPACE/packages" && prag search-local "anything" >/dev/null 2>&1); then
+            echo "search-local widened to the whole index outside a project"; exit 1
+          fi
 
   # The default embedder is a real 34 MB download from Hugging Face, so a plain
   # unit-test pass never exercises ONNX. Kept separate and continue-on-error:
@@ -93,4 +102,5 @@ jobs:
           trap 'prag daemon stop || true' EXIT
           prag watch "$GITHUB_WORKSPACE/packages/core"
           prag sync
-          prag search-local "how does the vector pool deduplicate content" -n 3
+          (cd "$GITHUB_WORKSPACE/packages/core" && \
+            prag search-local "how does the vector pool deduplicate content" -n 3)

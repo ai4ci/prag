@@ -40,10 +40,12 @@ async function waitForDaemon(port: number, ms = 20_000): Promise<void> {
 async function runPrag(
   args: string[],
   env: Record<string, string>,
+  cwd?: string,
 ): Promise<{ stdout: string; stderr: string; code: number }> {
   return new Promise((resolve, reject) => {
     const proc = spawn(process.execPath, [CLI_ENTRY, ...args], {
       env: { ...process.env, ...env },
+      cwd,
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
@@ -201,6 +203,28 @@ function subprocessEndToEndSuite(): void {
     assert.equal(code, 0, stdout);
     const result = JSON.parse(stdout) as { hits: Array<{ uri: string }>[] };
     assert.ok(result.hits.length > 0, "search-all found nothing");
+  });
+
+  void it("search-local outside every project is an error, not a whole-index search", async () => {
+    // ADR-018: "a search_local call without projectId is an error, never a silent
+    // widening of scope." The cwd here is outside both registered projects, so
+    // inference finds nothing -- and this used to return sub-proj's files anyway,
+    // which is precisely the widening the ADR forbids.
+    const outside = join(ctx.root, "elsewhere");
+    mkdirSync(outside, { recursive: true });
+    const { stdout, code } = await runPrag(["search-local", "greet", "--json"], ctx.env, outside);
+    assert.equal(code, 2, `expected the usage exit for PROJECT_ID_REQUIRED: ${stdout}`);
+    const env = JSON.parse(stdout) as { error: { code: string; remedy?: string } };
+    assert.equal(env.error.code, "PROJECT_ID_REQUIRED");
+    assert.match(env.error.remedy ?? "", /search-all/, "remedy must name the way out");
+
+    // The same query from inside the project still resolves by cwd.
+    const inside = await runPrag(["search-local", "greet", "--json"], ctx.env, ctx.projectDir);
+    assert.equal(inside.code, 0, `${inside.stdout}${inside.stderr}`);
+    assert.ok(
+      (JSON.parse(inside.stdout) as { hits: unknown[] }).hits.length > 0,
+      "cwd inference stopped working",
+    );
   });
 
   void it("--version reports the package version", async () => {
