@@ -104,7 +104,6 @@ _(no results)_
 
 <!-- loom view: task_list -->
 
-- [Implement the ingestion worker pool with main-thread embedding and writes](tasks/ingestion-worker-pool.md)
 - [Maintain the test fixture corpus and git fixture builder](tasks/test-fixture-corpus.md)
 - [Build Tree-sitter and LiteParse parser routing in @prag/daemon](tasks/daemon-parser-router.md)
 - [Implement LiteParse layout-preserving PDF/DOCX to Markdown pipeline](tasks/liteparse-document-pipeline.md)
