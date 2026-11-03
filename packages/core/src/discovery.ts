@@ -72,8 +72,33 @@ export function isBuiltinIgnored(filePath: string, root?: string): boolean {
   return segmentsOf(tested).some(isIgnoredSegment);
 }
 
+/**
+ * Errors that say "not right now", not "not ever".
+ *
+ * `EMFILE`/`ENFILE` are descriptor exhaustion, `ENOMEM` memory pressure,
+ * `EAGAIN`/`EBUSY` transient contention. Under load every one of them arrives
+ * at the same `catch` as `EACCES`, and treating them alike records a passing
+ * resource shortage as a permanent property of the file: it is skipped as
+ * "unreadable", the counter says so, and nothing retries it. The distinction
+ * matters wherever a skip is final.
+ */
+export function isTransientFsError(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException | null)?.code;
+  return code === "EMFILE" || code === "ENFILE" || code === "ENOMEM" ||
+    code === "EAGAIN" || code === "EBUSY" || code === "EINTR";
+}
+
 /** Why discovery excluded a file. `denied` means a grant refused it (ADR-009). */
-export type SkipReason = "tooLarge" | "binary" | "empty" | "denied" | "unreadable";
+export type SkipReason =
+  | "tooLarge" | "binary" | "empty" | "denied" | "unreadable"
+  /**
+   * Not examined this time because of a transient failure (see
+   * `isTransientFsError`). Distinct from `unreadable`, which is final: a
+   * deferred file is back on the queue and the next drain retries it. Shown
+   * separately so a reader is not told a file was skipped when it was only
+   * postponed.
+   */
+  | "deferred";
 
 export interface DiscoveryLimits {
   maxFileBytes?: number;

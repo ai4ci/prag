@@ -50,6 +50,7 @@ export {
   isDenied,
   isBuiltinIgnored,
   probeFile,
+  isTransientFsError,
   grantPatternToPath,
   pathToGrantPattern,
   DEFAULT_MAX_FILE_BYTES,

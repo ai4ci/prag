@@ -10,7 +10,7 @@ import type { FSWatcher } from "chokidar";
 import { open, readdir, stat, type FileHandle } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
 import {
-  isBuiltinIgnored, isDenied, DEFAULT_MAX_FILE_BYTES,
+  isBuiltinIgnored, isDenied, isTransientFsError, DEFAULT_MAX_FILE_BYTES,
   DEFAULT_WATCH_CONFIRM_THRESHOLD, documentCategory,
   DEFAULT_MAX_DOCUMENT_BYTES, type GrantRow,
 } from "@prag/core";
@@ -618,22 +618,22 @@ export class IngestionQueue {
   private async _checkFile(
     filePath: string,
     projectId: string,
-  ): Promise<boolean> {
+  ): Promise<"pass" | "skip" | "retry"> {
     // Held by the breaker. Checked before `isPaused` and in memory, because
     // the daemon's pause is a database write: without this, the rest of the
     // burst -- already sitting in the dirty set -- would be parsed and
     // embedded in the tens of milliseconds before the status lands, which is
     // exactly the work the breaker exists to prevent. Nothing is lost: the
     // files stay on disk and `prag resume` re-walks the tree.
-    if (this.growthBreaches.has(projectId)) return false;
-    if (await this.config.isPaused?.(projectId)) return false;
+    if (this.growthBreaches.has(projectId)) return "skip";
+    if (await this.config.isPaused?.(projectId)) return "skip";
 
     // Grants are consulted before the file is opened: `prag deny` on a secret
     // means prag never reads it, not merely that it discards the result.
     const grants = await this._currentGrants();
     if (grants && isDenied(filePath, grants)) {
       this._incrementSkip(projectId, "denied");
-      return false;
+      return "skip";
     }
 
     let fd: FileHandle | undefined;
@@ -651,12 +651,12 @@ export class IngestionQueue {
         : this.config.maxFileBytes;
       if (info.size > sizeCap) {
         this._incrementSkip(projectId, "tooLarge");
-        return false;
+        return "skip";
       }
 
       if (info.size === 0) {
         this._incrementSkip(projectId, "empty");
-        return false;
+        return "skip";
       }
 
       if (!isDocument) {
@@ -665,15 +665,24 @@ export class IngestionQueue {
         const { bytesRead } = await fd.read(buf, 0, BINARY_DETECTION_BYTES, 0);
         if (buf.subarray(0, bytesRead).includes(0)) {
           this._incrementSkip(projectId, "binary");
-          return false;
+          return "skip";
         }
       }
 
       this._recordGrowth(projectId, filePath, info.size, info.mtimeMs);
-      return true;
-    } catch {
+      return "pass";
+    } catch (err) {
+      // "Not right now" is not "not ever". Under load the open or the read
+      // raises EMFILE or ENOMEM, which arrived at the same `catch` as EACCES
+      // and was recorded as `unreadable` -- a final-looking skip for a
+      // passing resource shortage, with nothing to retry it. The file goes
+      // back on the queue instead, so the next drain picks it up.
+      if (isTransientFsError(err)) {
+        this._incrementSkip(projectId, "deferred");
+        return "retry";
+      }
       this._incrementSkip(projectId, "unreadable");
-      return false;
+      return "skip";
     } finally {
       await fd?.close();
     }
@@ -864,7 +873,12 @@ export class IngestionQueue {
       this.dirty.delete(key);
 
       // Apply discovery filters before dispatching
-      this._checkFile(uri, item.projectId).then((pass) => {
+      this._checkFile(uri, item.projectId).then((verdict) => {
+        if (verdict === "retry") {
+          this.dirty.set(queueKey(item.projectId, uri), item);
+          return;
+        }
+        const pass = verdict === "pass";
         if (!pass) return;
 
         // Dispatch to worker pool
@@ -929,8 +943,13 @@ export class IngestionQueue {
 
     let dispatched = 0;
     for (const item of items) {
-      const pass = await this._checkFile(item.uri, item.projectId);
-      if (!pass) continue;
+      const verdict = await this._checkFile(item.uri, item.projectId);
+      if (verdict === "retry") {
+        // Back on the queue, not dropped. The next drain retries it.
+        this.dirty.set(queueKey(item.projectId, item.uri), item);
+        continue;
+      }
+      if (verdict !== "pass") continue;
 
       dispatched++;
       this._dispatch(

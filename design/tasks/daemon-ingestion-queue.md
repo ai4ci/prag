@@ -13,6 +13,7 @@ addressed-by:
   - src:daemon/src/ingestion-queue.ts#ProjectIngestionState
 tested-by:
   - daemontest:reconcile-window.test.ts#reconcileWindowSuite
+  - coretest:transient-errors.test.ts#transientErrorSuite
   - daemontest:ingestion-queue.test.ts#ingestionQueueSuite
   - daemontest:admission-ordering.test.ts
 ---
@@ -116,3 +117,37 @@ each passed against the bug:
   ever mention it again, so only an open scan window can re-offer it.
 
 Both were then checked to fail with each fix reverted.
+
+### A third place, and the flake it probably explains
+
+`_checkFile` wrapped the whole open/stat/read sequence in one `catch` that
+recorded `unreadable` and dropped the file. `unreadable` is a final-sounding
+reason and nothing retries it -- but under load the error arriving there is
+as likely to be `EMFILE` or `ENOMEM` as `EACCES`, and those say "not right
+now", not "not ever".
+
+`isTransientFsError` now separates them. A transient failure puts the file
+back on the dirty set and counts as **`deferred`**, a reason distinct from
+`unreadable` precisely so a reader is not told a file was skipped when it was
+only postponed. `EACCES` and friends still skip, because retrying a file the
+user deliberately protected would be a loop.
+
+**This is the most likely explanation for the remaining suite flake** --
+`keeps the child repo's files out of the parent's ingestion queue` failing
+about 1 run in 30 with nothing ingested at all, under a full-suite load that
+has several node processes each holding worker threads, inotify instances
+and open files. It is *not proven*: the failure did not reproduce in 30 runs
+with diagnostics attached, which is itself consistent with a timing-sensitive
+resource race but is not evidence. What is proven is the captured line from
+one failing run,
+
+```
+[prag] ingestion write failed: WorkerPoolError: worker pool is closed
+```
+
+which shows a chokidar event arriving after the test had torn its pool down
+-- i.e. delivery was late in that run, so the reconcile was the only path
+left and it returned nothing.
+
+Recorded rather than closed. If it recurs, the next thing to capture is the
+`deferred` counter, which did not exist when it was last seen.
