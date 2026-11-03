@@ -114,6 +114,12 @@ export interface PragConfig {
   web?: {
     /** Backend id, e.g. "crawlberg". Unknown ids fail at startup. */
     backend?: string;
+    /**
+     * Pages one `prag watch <origin>` will index; default 200. `discover`
+     * reports what a site advertises, and an unbounded sitemap would
+     * otherwise turn one command into tens of thousands of embeds.
+     */
+    maxPagesPerSite?: number;
     firecrawl?: { url?: string; apiKey?: string };
     exa?: { apiKey?: string };
     /** Options for the built-in crawlberg backend (see WebBackendConfig). */

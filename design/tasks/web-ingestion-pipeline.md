@@ -8,6 +8,7 @@ relates-to:
   - feature:web-and-nonlocal-content.md
 tested-by:
   - daemontest:web-ingestion.test.ts
+  - daemontest:web-crawl.test.ts
 ---
 ## Objective
 Implement the web/non-local content ingestion pipeline described in `web-and-nonlocal-content.md`, calling the `WebFetchBackend` interface rather than any vendor client directly (ADR-024).
@@ -101,3 +102,29 @@ can crawl yet, so it is refused by name rather than half-built.
   and still worth a second opinion: a bare origin means the site, a path means
   one document. Now that `discover` has a provider the rule is actually
   reachable, so getting it wrong has consequences it did not have before.
+
+### Crawl ingestion — done
+
+`Daemon.ingestWebSite` closes the remaining half. `discover` names the URLs
+and each goes through `ingestWebUri`, which **re-evaluates the grants**: a
+backend may return URLs the user never named, and a `deny` on a child of an
+allowed prefix has to win (ADR-009). `daemontest:web-crawl.test.ts` denies a
+page listed in the site's own sitemap and asserts it stays out of the index.
+
+Three decisions worth stating:
+
+- **Serial, not parallel.** Embedding is on the main thread by ADR-021, so
+  parallel fetches would queue behind it and buy nothing, while N connections
+  to one host is the behaviour crawlberg's `rateLimitMs` exists to prevent.
+  The bound that matters is pages, not concurrency.
+- **Bounded by `web.maxPagesPerSite`, default 200.** `discover` reports what a
+  site advertises; a 50k-URL sitemap would otherwise make one `prag watch`
+  into 50k fetches and embeds.
+- **A failing page is counted, not fatal.** One 500 must not abandon a crawl,
+  so failures are logged with their URI and reported as `errored` alongside
+  the `denied` count, in the same `skipped` shape a local directory scan uses.
+  A crawl that indexes nothing is not an error: the grant is written and the
+  ADR-008 refresh sweep retries.
+
+`watchUri` on a bare origin now crawls instead of writing the grant and
+throwing `CRAWL_CAPABILITY_UNAVAILABLE`.

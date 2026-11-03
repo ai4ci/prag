@@ -87,6 +87,7 @@ export function loadConfig(): DaemonConfig {
     port,
     token,
     webBackend,
+    webMaxPagesPerSite: config.web?.maxPagesPerSite,
     webCooldownSeconds: config.defaults?.webCooldownSeconds,
     paths,
     ingestion: {

@@ -102,6 +102,12 @@ const DEFAULT_EMBEDDING_BATCH = 32;
 const DEFAULT_WEB_COOLDOWN_SECONDS = 86_400;
 /** How often expired web leases are swept. */
 const DEFAULT_WEB_REFRESH_MS = 15 * 60_000;
+/**
+ * Pages one `prag watch <origin>` will index. A bound is required: `discover`
+ * reports what a site advertises, and a sitemap with 50k URLs would otherwise
+ * become 50k fetches and embeds from a single command.
+ */
+const DEFAULT_WEB_MAX_PAGES = 200;
 
 /**
  * A filename-shaped string for a URL, so the parser router can pick a chunker.
@@ -156,6 +162,8 @@ export interface DaemonConfig {
   };
   /** ADR-024: the selected web fetch backend, or null for local-only. */
   webBackend?: WebFetchBackend | null;
+  /** Pages one site crawl will index; default 200. */
+  webMaxPagesPerSite?: number;
   /** ADR-008 lease for web content, seconds. `0` means never re-fetch. */
   webCooldownSeconds?: number;
   /** How often expired web leases are swept. `0` disables the sweep. */
@@ -694,6 +702,50 @@ export class Daemon {
       { validUntil: this._webLease(fetched.freshness) },
     );
     return { indexed: true };
+  }
+
+  /**
+   * Enumerate a granted site and index the pages the grants admit.
+   *
+   * The crawl half of `task:web-ingestion-pipeline.md`. `discover` names the
+   * URLs; each is then put through `ingestWebUri`, which re-checks the grants
+   * — a backend is free to return URLs the user never named, and a `deny` on
+   * a child of an allowed prefix has to win (ADR-009).
+   *
+   * Serial, deliberately. Embedding is on the main thread by ADR-021, so
+   * parallel fetches would only queue behind it, and a crawler that opens N
+   * connections to one host is the behaviour `rateLimitMs` exists to prevent.
+   * The bound that matters is `maxPages`, not concurrency.
+   */
+  async ingestWebSite(
+    rootUri: string,
+    opts: { maxPages?: number } = {},
+  ): Promise<{ discovered: number; indexed: number; skipped: number; failed: number }> {
+    if (!this.db || !this.embedder) {
+      throw new DaemonFailure("SERVICE_UNAVAILABLE", "the index is not available");
+    }
+    const maxPages = opts.maxPages ?? this.config.webMaxPagesPerSite ?? DEFAULT_WEB_MAX_PAGES;
+    const backend = requireCapability(this.config.webBackend ?? null, "discover", rootUri);
+
+    const found = await backend.discover!(rootUri, { limit: maxPages });
+
+    let indexed = 0;
+    let skipped = 0;
+    let failed = 0;
+    for (const url of found.urls.slice(0, maxPages)) {
+      try {
+        const out = await this.ingestWebUri(url);
+        if (out.indexed) indexed++;
+        else skipped++;
+      } catch (err) {
+        // One unreachable or unparseable page must not abandon the crawl.
+        // Counted and logged, so a site that is mostly failing is visible
+        // rather than silently thin.
+        failed++;
+        console.error(`[prag] web ingest failed for ${url}:`, err);
+      }
+    }
+    return { discovered: found.urls.length, indexed, skipped, failed };
   }
 
   /**
@@ -1299,15 +1351,27 @@ export class Daemon {
       this.invalidateGrantCache();
 
       if (wantsSite) {
-        // Crawl is task:web-ingestion-pipeline.md's remaining half and no
-        // built-in backend can discover yet, so this is unreachable today --
-        // but saying so beats pretending the grant indexed anything.
-        throw new DaemonFailure(
-          "CRAWL_CAPABILITY_UNAVAILABLE",
-          `crawling a whole site is not implemented yet, so ${rootUri} was granted but not indexed`,
-          "Watch a specific page URL instead, or a file:// URI.",
-          { uri: rootUri, backend: this.config.webBackend?.id ?? null },
-        );
+        const crawled = await this.ingestWebSite(rootUri);
+        const projectId = Daemon.webProjectId(rootUri);
+        return {
+          projectId,
+          rootUri,
+          status: crawled.indexed > 0 ? "active" : "skipped",
+          registered: crawled.indexed > 0 ? [projectId] : [],
+          discovered: {
+            projects: 1,
+            files: crawled.indexed,
+            // Reported the way a local scan reports its skips, so `prag watch`
+            // on a site and on a directory read the same way: a page the
+            // grants excluded is `denied`, one that failed to fetch is
+            // `errored`. A crawl that indexes nothing is not an error --
+            // the grant is written and the refresh sweep will retry.
+            skipped: {
+              ...(crawled.skipped > 0 ? { denied: crawled.skipped } : {}),
+              ...(crawled.failed > 0 ? { errored: crawled.failed } : {}),
+            },
+          },
+        };
       }
 
       const out = await this.ingestWebUri(rootUri);
