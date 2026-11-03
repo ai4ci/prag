@@ -2,7 +2,7 @@
 class: issue
 id: daemon-suite-flaky-under-parallel-execution.md
 title: Daemon test files fail intermittently at file level under parallel execution
-status: open
+status: resolved
 priority: medium
 relates-to:
 - feature:test-harness-and-fixtures.md
@@ -63,3 +63,18 @@ runner (`--test-concurrency=1`) also hides it, at roughly 3x wall clock
 Worth considering: raise `engines.node` from `>=22` with a note that 24.14.0
 through 24.18.x are known-bad, so the next person does not spend an afternoon
 on it.
+
+## Resolved 2026-11-03
+
+The machine was running two Node installs: `/usr/local/bin/node` at v24.14.1
+(a manual install) shadowing the distro's `/usr/bin/node`, because
+`/usr/local/bin` precedes `/usr/bin` on PATH. The affected one won.
+
+Verified before the upgrade: 6/6 clean runs of the daemon suite on v26.13.0
+under `taskset -c 0`, the exact single-CPU condition that reproduced the abort
+within 3 runs on v24.14.1. The machine now runs v26.13.0 and the suite is
+clean.
+
+No repository change was needed. The test harness, the worker pool and every
+teardown path were suspected and exonerated. ADR-020's amendment records the
+usable Node range so the next person does not lose an afternoon to it.

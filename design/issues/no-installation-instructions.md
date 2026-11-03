@@ -74,3 +74,51 @@ Binary packaging *choice* (Bun single-file executable vs. published npm package
 vs. both) is `task:toolchain-spike-native-addons.md`; this issue is the gap in
 documentation and in having any runnable artifact, not the decision about which
 distribution format wins.
+
+## Decision 2026-11-03: npm package first, container for the daemon; no single binary
+
+Investigated whether `bun build --compile` could produce a daemon binary that
+deploys with no Node or Bun runtime. It can embed `.node` addons, but all three
+of this project's native dependencies sit in its documented failure modes:
+
+- An embedded addon is **extracted to a temp file and `dlopen`'d**, so it needs
+  a writable `TMPDIR`. On a read-only root filesystem it fails with a
+  misleading `/$bunfs/...` path ([oven-sh/bun#45166](https://github.com/oven-sh/bun/issues/45166),
+  [#45054](https://github.com/oven-sh/bun/issues/45054)).
+- **Only the `.node` file is extracted**, so a sibling shared library it links
+  against is not found ([#44063](https://github.com/oven-sh/bun/issues/44063)).
+  `onnxruntime-node` ships exactly that shape.
+- Embedding needs a **literal, static `require`**; a computed path is not
+  discovered at build time. `@kreuzberg/tree-sitter-language-pack` resolves
+  grammars by computed path ([WillBooster/tree-sitter#78](https://github.com/WillBooster/tree-sitter/pull/78)
+  exists for this case).
+
+`@lancedb/lancedb` is the most likely of the three to work, being a
+self-contained Rust NAPI package.
+
+These were read, not reproduced — the dependency shapes match the reports, but
+no binary was built. Treat as "documented failure modes matching our
+dependency shapes", not a tested result. Node's own SEA is strictly worse here:
+it does not bundle native addons at all.
+
+**The deeper point is that a binary would not deliver what it promises.** The
+default embedder downloads ~130MB of ONNX weights to a cache on first real
+embed, so the artifact would still need network and writable state on first
+run. A single binary solves installation, not deployment.
+
+### What to do instead
+
+1. **Publish `@prag/cli` to npm** with a real `bin` entry
+   (`packages/cli/bin/prag.mjs`, already correct) and `engines.node`. This is
+   what the issue actually asks for and is the cheapest route by a wide margin;
+   prebuilt native packages already handle platform resolution.
+2. **Ship a container image for the daemon.** It is a long-lived loopback
+   service, so a container is its natural unit: it sidesteps every issue above
+   and can bake the model weights in so first run works offline.
+3. **No single binary.** Revisit only if someone has a deployment target that
+   rules out both, and then as a CLI binary (no native dependencies) rather
+   than a daemon one.
+
+Scope note: this decision records *what* to ship. Writing the install
+documentation, the npm publish workflow and the Dockerfile is the remaining
+work, and this issue stays open for it.

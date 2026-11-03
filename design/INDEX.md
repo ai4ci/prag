@@ -50,7 +50,6 @@ _(no results)_
 
 <!-- loom view: issue_list -->
 
-- [Daemon test files fail intermittently at file level under parallel execution](issues/daemon-suite-flaky-under-parallel-execution.md)
 - [LanceDB schema evolution relies on drop-and-reindex](issues/lancedb-schema-migration-strategy.md)
 - [No installation instructions or installable artifact](issues/no-installation-instructions.md)
 - [No budget or alert for chunks_pool disk usage growth](issues/chunk-pool-disk-usage-growth.md)
@@ -62,6 +61,7 @@ _(no results)_
 <!-- loom view: resolved_issue_list -->
 
 - [packages/daemon has no executable entry point — lazy spawn and prag daemon start can never succeed](issues/daemon-entry-point-has-no-main.md)
+- [Daemon test files fail intermittently at file level under parallel execution](issues/daemon-suite-flaky-under-parallel-execution.md)
 - [Ingestion writes a random fileVersionId and empty contentHash, and the upsert helpers append, so nothing is content-addressable or deduplicated](issues/file-level-cas-never-written.md)
 - [IngestionQueue.dirty is keyed by uri alone, so two projects watching one file race for ownership](issues/ingestion-dirty-set-keyed-by-uri-alone.md)
 - [Root npm run lint cannot run — tsc --noEmit fails TS6059 rootDir for every package file](issues/root-tsconfig-breaks-typecheck.md)
@@ -106,7 +106,6 @@ _(no results)_
 
 - [Implement the ingestion worker pool with main-thread embedding and writes](tasks/ingestion-worker-pool.md)
 - [Maintain the test fixture corpus and git fixture builder](tasks/test-fixture-corpus.md)
-- [Spike native addon support under Bun (LanceDB, ONNX, Tree-sitter)](tasks/toolchain-spike-native-addons.md)
 - [Construct thread-safe background queue with Chokidar debouncing](tasks/daemon-ingestion-queue.md)
 - [Build Tree-sitter and LiteParse parser routing in @prag/daemon](tasks/daemon-parser-router.md)
 - [Implement LiteParse layout-preserving PDF/DOCX to Markdown pipeline](tasks/liteparse-document-pipeline.md)
@@ -122,5 +121,7 @@ _(no results)_
 
 <!-- loom view: untested_task_list -->
 
-_(no results)_
+| uri | status |
+| --- | --- |
+| [Spike native addon support under Bun (LanceDB, ONNX, Tree-sitter)](tasks/toolchain-spike-native-addons.md) | done |
 <!-- loom view: untested_task_list end -->
