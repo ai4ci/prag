@@ -2,7 +2,7 @@
 class: task
 id: web-fetch-backend-interface.md
 title: Define the capability-negotiating web fetch backend interface
-status: in_progress
+status: done
 priority: medium
 relates-to:
   - feature:web-and-nonlocal-content.md
@@ -86,15 +86,27 @@ belong to the pipeline task and are noted below rather than half-built.
   test makes an outbound call, and the capability error is asserted by `code`
   (ADR-022), never by message text.
 
-### Belongs to `task:web-ingestion-pipeline.md`
+### Closed 2026-11-03: the two deferred requirements landed with the pipeline
 
-- Re-evaluating every backend-returned URL against the grants table before
-  writing (allow-parent plus deny-child), and applying
-  `ingestion.maxFileBytes` to backend payloads on the ingestion path. The
-  backend takes a `maxBytes` and honours it; wiring the configured value
-  through, and the grant re-check, happen where content is written, which does
-  not exist yet.
+Both were held back because they belong where content is written, and that
+did not exist. It does now (`task:web-ingestion-pipeline.md`, done):
 
-`/projects/watch` therefore still refuses every non-`file://` URI, but now
-with a reason that distinguishes "no backend", "backend cannot crawl" and
-"ingestion not implemented" instead of collapsing all three.
+- **Grant re-evaluation of backend-returned URLs — DONE.** `ingestWebUri`
+  calls `evaluateUriGrants` on the requested URL, requiring an explicit
+  `allow` rather than merely "not denied", and again on the *final* URL after
+  redirects -- otherwise an allow on one host is a way to index another.
+  `ingestWebSite` routes every discovered URL through the same gate, so a
+  `deny` on a child of an allowed prefix wins even when the site's own
+  sitemap advertises it. Asserted in `daemontest:web-crawl.test.ts`.
+- **`ingestion.maxFileBytes` applied to backend payloads — DONE.** Passed to
+  `backend.fetch` as `maxBytes` and applied again to the returned text, so a
+  backend that ignores the hint cannot exceed the budget.
+
+`/projects/watch` no longer refuses non-`file://` URIs: with `crawlberg`
+configured a page is fetched and a bare origin is crawled. With no backend it
+still refuses, with `CRAWL_BACKEND_REQUIRED`, which is the correct answer for
+a local-only install.
+
+**This task is complete.** The remaining backends (`task:firecrawl-backend.md`,
+`task:exa-backend.md`) implement this interface rather than change it; `exa`
+is the only one that would add a capability (`search`).

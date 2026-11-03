@@ -7,7 +7,7 @@
     "prag": "./bin/prag.mjs"
   },
   "scripts": {
-    "test": "tsx --test 'test/*.test.ts'"
+    "test": "tsx --test --test-timeout=60000 'test/*.test.ts'"
   },
   "dependencies": {
     "@prag/daemon": "*",
