@@ -1018,7 +1018,9 @@ export class IngestionQueue {
       // content hash, so an overlap costs a stat and a read, never an embed.
       // That makes a grace window the cheap side of the trade.
       const since = Math.max(0, (this.reconciledAt.get(id) ?? 0) - RECONCILE_GRACE_MS);
-      this.reconciledAt.set(id, Date.now());
+      const startedAt = Date.now();
+      // Set only if the walk completes -- see the end of this loop.
+      let incomplete = false;
 
       const stack = [dir];
       while (stack.length > 0) {
@@ -1026,8 +1028,25 @@ export class IngestionQueue {
         let entries;
         try {
           entries = await readdir(current, { withFileTypes: true });
-        } catch {
-          continue; // unreadable directory: the watcher reports it as `denied`
+        } catch (err) {
+          const code = (err as NodeJS.ErrnoException)?.code;
+          // A directory that no longer exists is not a failure: there is
+          // genuinely nothing there to scan, and `unlink` events cover what
+          // left with it.
+          if (code === "ENOENT") continue;
+          // Anything else -- EACCES, and under load EMFILE or ENOMEM -- means
+          // this subtree was not examined. The old code swallowed it on the
+          // assumption that the only cause was permissions, which the watcher
+          // would report as `denied`. EMFILE is transient and reports nothing,
+          // so a momentary descriptor shortage silently skipped a directory
+          // and the stamp below then advanced past its files, making them
+          // invisible to every later reconcile too.
+          incomplete = true;
+          console.error(
+            `[prag] reconcile could not read ${current} (${code ?? "unknown"}); ` +
+            "this project's scan window stays open and the next drain retries it.",
+          );
+          continue;
         }
         for (const entry of entries) {
           const full = join(current, entry.name);
@@ -1046,11 +1065,19 @@ export class IngestionQueue {
             // mtime, not content hash: hashing the tree per drain is worse, and a
             // false positive just re-runs an idempotent ingestion.
             if (info.mtimeMs > since) this._onEvent(id, full, "change");
-          } catch {
-            /* vanished between readdir and stat */
+          } catch (err) {
+            // Vanished between readdir and stat is ordinary. Anything else
+            // left this file unexamined, so the window must stay open.
+            if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") incomplete = true;
           }
         }
       }
+
+      // The stamp is the walk's promise that everything older has been seen.
+      // A walk that could not read part of the tree has not earned it, so the
+      // window stays open and the next drain covers the same period again.
+      // Re-examination is idempotent; a silently lost file is not.
+      if (!incomplete) this.reconciledAt.set(id, startedAt);
     }
   }
 }
