@@ -2,7 +2,7 @@
 class: task
 id: web-ingestion-pipeline.md
 title: Implement the web URI ingestion pipeline on top of a fetch backend
-status: in_progress
+status: done
 priority: medium
 relates-to:
   - feature:web-and-nonlocal-content.md
@@ -76,9 +76,8 @@ can crawl yet, so it is refused by name rather than half-built.
 
 ### Not done
 
-- **Crawl / `discover` ingestion.** Needs a backend with the capability, which
-  is `task:firecrawl-backend.md` / `task:exa-backend.md`, both parked on
-  credentials.
+- ~~**Crawl / `discover` ingestion.**~~ Superseded below: `crawlberg`
+  provides the capability, so this never needed Firecrawl or Exa.
 
 ## Update 2026-11-03: crawlberg resolves two of the three parked points
 
