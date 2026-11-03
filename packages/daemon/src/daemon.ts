@@ -8,6 +8,7 @@ import {
   createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { readFileSync, statSync, existsSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
+import { createHash } from "node:crypto";
 import { pathToFileURL, fileURLToPath } from "node:url";
 
 import {
@@ -46,6 +47,10 @@ import {
   API_VERSION,
   requireCapability,
   type WebFetchBackend,
+  isDenied,
+  chunkDocumentOrCode,
+  DEFAULT_MAX_FILE_BYTES,
+  type FreshnessHint,
 } from "@prag/core";
 
 import { McpHandler } from "./mcp-server.js";
@@ -93,6 +98,26 @@ const POST_ONLY_ROUTES = new Set([
 
 /** Chunks per embedBatch call when the caller does not override it. */
 const DEFAULT_EMBEDDING_BATCH = 32;
+/** ADR-008 default web freshness lease when config.json names none: 24h. */
+const DEFAULT_WEB_COOLDOWN_SECONDS = 86_400;
+/** How often expired web leases are swept. */
+const DEFAULT_WEB_REFRESH_MS = 15 * 60_000;
+
+/**
+ * A filename-shaped string for a URL, so the parser router can pick a chunker.
+ *
+ * The router keys off the extension (markdown vs code vs other), and a URL
+ * usually has none. The content type decides when it does not: HTML has
+ * already been reduced to prose by the backend, which chunks far better as a
+ * document than as source.
+ */
+function webPseudoPath(url: string, contentType?: string): string {
+  const path = new URL(url).pathname;
+  const named = /\.[a-z0-9]{1,6}$/i.test(path) ? path : "";
+  if (named) return named;
+  if (contentType && /html|markdown|plain/i.test(contentType)) return "page.md";
+  return "page.md";
+}
 
 /** ADR-019: how long POST /sync may take before it reports what is outstanding. */
 export const DEFAULT_SYNC_TIMEOUT_MS = 60_000;
@@ -131,6 +156,10 @@ export interface DaemonConfig {
   };
   /** ADR-024: the selected web fetch backend, or null for local-only. */
   webBackend?: WebFetchBackend | null;
+  /** ADR-008 lease for web content, seconds. `0` means never re-fetch. */
+  webCooldownSeconds?: number;
+  /** How often expired web leases are swept. `0` disables the sweep. */
+  webRefreshIntervalMs?: number;
   /** Model id the daemon embeds with (resolved by bootstrap). */
   embeddingModel?: string;
   /** ADR-014 window size; clamped to the model ceiling by bootstrap. */
@@ -185,6 +214,8 @@ export class Daemon {
   private _options: DaemonOptions = {};
   /** ADR-015: set when the index's embedding space does not match the model. */
   private _mismatch: Error | null = null;
+  /** ADR-008 periodic web refresh; null when no backend is configured. */
+  private _webRefreshTimer: ReturnType<typeof setInterval> | null = null;
   /** Guards against two concurrent POST /reembed sweeps. */
   private _reembedding = false;
   /** In-flight ingestion writes; /sync waits for these to settle. */
@@ -249,6 +280,19 @@ export class Daemon {
       );
     }
 
+    // ADR-008: web leases expire on a clock, not on a filesystem event, so
+    // something has to come looking. unref'd so it never holds the process
+    // open, and skipped entirely when there is no backend to refresh through.
+    if (this.config.webBackend && (this.config.webRefreshIntervalMs ?? 0) !== 0) {
+      const every = this.config.webRefreshIntervalMs ?? DEFAULT_WEB_REFRESH_MS;
+      this._webRefreshTimer = setInterval(() => {
+        void this.refreshExpiredWebContent().catch((err) => {
+          console.error("[prag] web refresh sweep failed:", err);
+        });
+      }, every);
+      this._webRefreshTimer.unref?.();
+    }
+
     this.startTime = Date.now();
 
     this.server = createServer((req, res) => this._handle(req, res));
@@ -284,6 +328,10 @@ export class Daemon {
 
   /** Graceful shutdown. */
   async stop(): Promise<void> {
+    if (this._webRefreshTimer) {
+      clearInterval(this._webRefreshTimer);
+      this._webRefreshTimer = null;
+    }
     // Drain queued work first: close() used to discard the dirty set, so files
     // changed shortly before shutdown were silently never indexed.
     if (this.ingestionQueue) {
@@ -537,8 +585,170 @@ export class Daemon {
     // job (ADR-017, issue:unlink-prune-deletes-shared-pool-rows).
   }
 
-  private async _ingestFile(result: ProcessResult): Promise<void> {
+  // ── Web ingestion (ADR-024, task:web-ingestion-pipeline.md) ─────────
+
+  /**
+   * Normalized project id for a web URI: scheme + host, no path.
+   *
+   * Every page of a site belongs to one project, so a search can be scoped to
+   * "the LanceDB docs" rather than to one page. `branch` is always `$default`
+   * -- a web document has no branches to disambiguate (CAS schema).
+   */
+  static webProjectId(uri: string): string {
+    const u = new URL(uri);
+    return `${u.protocol}//${u.host}`;
+  }
+
+  /**
+   * ADR-008/ADR-024: how long the fetched copy may be trusted.
+   *
+   * A cached copy gets the *remaining* life of the lease, not a full one --
+   * the content was already `ageSeconds` old when the backend handed it over,
+   * and granting it a full window would make the index staler than the
+   * configured policy allows. A backend with no cache always reports `live`.
+   */
+  private _webLease(freshness: FreshnessHint): Date | null {
+    const seconds = this.config.webCooldownSeconds ?? DEFAULT_WEB_COOLDOWN_SECONDS;
+    if (seconds <= 0) return null; // explicitly permanent: never re-fetched
+    const used = freshness.kind === "cached" ? (freshness.ageSeconds ?? 0) : 0;
+    // Floor at a minute rather than the past: a lease already expired on
+    // arrival would have the refresh scan re-fetch it immediately, forever.
+    const remaining = Math.max(60, seconds - used);
+    return new Date(Date.now() + remaining * 1000);
+  }
+
+  /**
+   * Fetch one granted URL through the configured backend and index it.
+   *
+   * Opt-in only: the grants table is consulted here, not merely at the point
+   * the URL was registered, because a backend may hand back URLs the user
+   * never named and a `deny` on a child of an allowed prefix has to win
+   * (ADR-009).
+   */
+  async ingestWebUri(uri: string): Promise<{ indexed: boolean; reason?: string }> {
+    if (!this.db || !this.embedder) {
+      throw new DaemonFailure("SERVICE_UNAVAILABLE", "the index is not available");
+    }
+    const backend = requireCapability(this.config.webBackend ?? null, "fetch", uri);
+
+    // `evaluateUriGrants`, not `isDenied`: the latter takes a filesystem path
+    // and runs pathToFileURL over it, so an http URL becomes a nonsense
+    // file:// URI that matches nothing and is silently "allowed".
+    //
+    // Opt-in means an explicit `allow` must match (ADR-009 deny-by-default);
+    // "not denied" is not the same thing and would fetch anything a backend
+    // happened to return.
+    const grants = await this._grantRows();
+    const verdict = grants ? evaluateUriGrants(uri, grants) : null;
+    if (!verdict || verdict.action !== "allow") {
+      // Not an error: a crawl legitimately turns up URLs the policy excludes,
+      // and reporting each as a failure would make a normal run look broken.
+      return { indexed: false, reason: verdict?.action === "deny" ? "denied" : "not-granted" };
+    }
+
+    const maxBytes = this.config.ingestion?.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES;
+    const fetched = await backend.fetch!(uri, { maxBytes });
+
+    // The backend may have redirected; re-check the URL actually retrieved, or
+    // an allow on one host becomes a way to index another.
+    if (fetched.url !== uri && evaluateUriGrants(fetched.url, grants!).action !== "allow") {
+      return { indexed: false, reason: "denied-after-redirect" };
+    }
+
+    const text = fetched.text.slice(0, maxBytes);
+    if (text.trim() === "") return { indexed: false, reason: "empty" };
+
+    // Backend text is data, never instructions: it is hashed, chunked and
+    // embedded exactly like file content and is never interpreted.
+    const projectId = Daemon.webProjectId(fetched.url);
+
+    // The site is a project in its own right, or a scoped search cannot name
+    // it and `currentBranchFor` has no row to resolve against. isGit false and
+    // branch `$default`: a web document has no branches to disambiguate.
+    await upsertProjects(this.db.table("projects"), [{
+      projectId,
+      rootUri: projectId,
+      name: new URL(projectId).host,
+      isGit: false,
+      defaultCooldownSeconds: this.config.webCooldownSeconds ?? DEFAULT_WEB_COOLDOWN_SECONDS,
+      status: "active",
+      registeredAt: new Date(),
+      lastSyncedAt: new Date(),
+    }]);
+
+    const chunked = chunkDocumentOrCode(webPseudoPath(fetched.url, fetched.contentType), text);
+
+    await this._ingestFile(
+      {
+        projectId,
+        filePath: fetched.url,
+        language: chunked.language,
+        contentHash: createHash("sha256").update(text).digest("hex"),
+        chunks: chunked.chunks.map((c) => ({
+          ...c,
+          projectId,
+          filePath: fetched.url,
+          scopeContext: c.scopeContext ?? "",
+        })),
+      },
+      { validUntil: this._webLease(fetched.freshness) },
+    );
+    return { indexed: true };
+  }
+
+  /**
+   * ADR-008: re-fetch web content whose lease has expired.
+   *
+   * Only expired rows, and `_ingestFile` compares content hashes, so an
+   * unchanged page costs one fetch and a lease refresh rather than a re-embed.
+   * `validUntil IS NULL` is permanent and never revisited.
+   */
+  async refreshExpiredWebContent(now: Date = new Date()): Promise<{ checked: number; reindexed: number }> {
+    if (!this.db || !this.config.webBackend) return { checked: 0, reindexed: 0 };
+    const rows = (await this.db
+      .table("file_mapping")
+      .query()
+      .limit(10000)
+      .toArray()) as Array<{ uri: string; validUntil: Date | null; contentHash: string }>;
+
+    const due = rows.filter(
+      (r) => /^https?:\/\//.test(r.uri) && r.validUntil != null && new Date(r.validUntil) <= now,
+    );
+
+    let reindexed = 0;
+    for (const row of due) {
+      try {
+        const before = row.contentHash;
+        await this.ingestWebUri(row.uri);
+        const after = (await this.db
+          .table("file_mapping")
+          .query()
+          .filter(`uri = '${row.uri.replace(/'/g, "''")}'`)
+          .limit(1)
+          .toArray()) as Array<{ contentHash: string }>;
+        if (after[0] && after[0].contentHash !== before) reindexed++;
+      } catch (err) {
+        // One unreachable page must not stop the sweep: the lease stays
+        // expired and the next scan retries it.
+        console.error(`[prag] web refresh failed for ${row.uri}:`, err);
+      }
+    }
+    return { checked: due.length, reindexed };
+  }
+
+  private async _ingestFile(
+    result: ProcessResult,
+    /**
+     * Lease for this content. Local files use the ingestion cooldown; web
+     * content uses `defaults.webCooldownSeconds`, shortened when the backend
+     * served a cached copy (ADR-008/ADR-024). `null` means no expiry -- a
+     * permanently static document that the refresh scan never revisits.
+     */
+    leaseOverride?: { validUntil: Date | null },
+  ): Promise<void> {
     if (!this.db || !this.embedder) return;
+    const lease = (): Date | null =>
+      leaseOverride ? leaseOverride.validUntil : this.cooldownExpiry();
 
     const fmTable = this.db.table("file_mapping");
     const uri = result.filePath;
@@ -560,7 +770,7 @@ export class Daemon {
     if (current && current.contentHash === contentHash) {
       // Refresh the lease only; the index is already correct.
       await fmTable.update({
-        values: { validUntil: this.cooldownExpiry() },
+        values: { validUntil: lease() },
         where: `fileVersionId = '${current.fileVersionId as string}'`,
       });
       // But the *pointer* may not be: after `git checkout` the same content is now
@@ -621,7 +831,7 @@ export class Daemon {
       fileVersionId,
       projectId: result.projectId,
       uri,
-      validUntil: this.cooldownExpiry(),
+      validUntil: lease(),
       contentHash,
       language: result.language,
     }]);
@@ -1065,34 +1275,62 @@ export class Daemon {
       );
     }
 
-    if (!this.ingestionQueue) {
-      // Distinct from "the index is not open": the daemon is up and searchable,
-      // it just has no workers, so the remedy is a config change and a restart.
-      throw new DaemonFailure(
-        "SERVICE_UNAVAILABLE",
-        "ingestion is disabled on this daemon, so nothing can be watched",
-        "Set ingestion.poolSize > 0 in config.json (or PRAG_POOL_SIZE) and restart the daemon.",
-      );
-    }
 
     const rootUri = opts.uri;
     if (!rootUri) {
       throw new DaemonFailure("INVALID_REQUEST", "'uri' is required");
     }
     if (!rootUri.startsWith("file://")) {
-      // ADR-024: watching a prefix is a `discover`, not a `fetch` -- a
-      // fetch-only backend must say so by name rather than quietly indexing
-      // the single page the user pointed at. `requireCapability` also covers
-      // the no-backend case, which is the same refusal to a user.
-      requireCapability(this.config.webBackend ?? null, "discover", rootUri);
-      // The pipeline itself is task:web-ingestion-pipeline.md. Until it
-      // exists, a capable backend still cannot be acted on, and saying that
-      // plainly beats pretending the grant was accepted.
+      // A bare origin means "the site" and needs `discover`; anything with a
+      // path is one document and needs `fetch`. The rule has to be *some*
+      // rule -- a URL does not say which the user meant -- and this one is at
+      // least predictable from the URL alone. `requireCapability` covers the
+      // no-backend case too, which is the same refusal to a user.
+      const parsed = new URL(rootUri);
+      const wantsSite = parsed.pathname === "" || parsed.pathname === "/";
+      requireCapability(this.config.webBackend ?? null, wantsSite ? "discover" : "fetch", rootUri);
+
+      await upsertGrants(this.db.table("grants"), [{
+        pattern: rootUri + (wantsSite ? "/**" : ""),
+        action: "allow",
+        reason: "watch_root",
+        createdAt: new Date(),
+      }]);
+      this.invalidateGrantCache();
+
+      if (wantsSite) {
+        // Crawl is task:web-ingestion-pipeline.md's remaining half and no
+        // built-in backend can discover yet, so this is unreachable today --
+        // but saying so beats pretending the grant indexed anything.
+        throw new DaemonFailure(
+          "CRAWL_CAPABILITY_UNAVAILABLE",
+          `crawling a whole site is not implemented yet, so ${rootUri} was granted but not indexed`,
+          "Watch a specific page URL instead, or a file:// URI.",
+          { uri: rootUri, backend: this.config.webBackend?.id ?? null },
+        );
+      }
+
+      const out = await this.ingestWebUri(rootUri);
+      const projectId = Daemon.webProjectId(rootUri);
+      return {
+        projectId,
+        rootUri,
+        status: out.indexed ? "active" : "skipped",
+        registered: out.indexed ? [projectId] : [],
+        discovered: { projects: 1, files: out.indexed ? 1 : 0, skipped: {} },
+      };
+    }
+
+    if (!this.ingestionQueue) {
+      // Only the file path needs the pool: a watcher and a parse worker are
+      // what it buys. Web ingestion fetches and chunks on the main thread, so
+      // demanding workers for it refused a request that would have worked.
+      // Distinct from "the index is not open": the daemon is up and
+      // searchable, so the remedy is a config change and a restart.
       throw new DaemonFailure(
-        "CRAWL_BACKEND_REQUIRED",
-        `web ingestion is not implemented yet, so ${rootUri} cannot be watched`,
-        "Watch a file:// URI. Tracked by task:web-ingestion-pipeline.md.",
-        { uri: rootUri, backend: this.config.webBackend?.id ?? null },
+        "SERVICE_UNAVAILABLE",
+        "ingestion is disabled on this daemon, so nothing can be watched",
+        "Set ingestion.poolSize > 0 in config.json (or PRAG_POOL_SIZE) and restart the daemon.",
       );
     }
 

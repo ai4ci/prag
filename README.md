@@ -87,7 +87,7 @@ The bearer token comes from `PRAG_API_KEY`; unset, it defaults to `guest` and pr
 ### Verify your install
 
 ```bash
-npm test        # 101 core + 120 daemon + 33 cli (spawned daemons, ~45s;
+npm test        # 101 core + 127 daemon + 33 cli (spawned daemons, ~45s;
 #                 PRAG_TEST_MODE=in-process is faster where loopback to a child is blocked)
 npm run lint
 ```
@@ -124,8 +124,9 @@ npm run lint
 Design requirements not yet implemented:
 
 - [ ] LiteParse PDF/DOCX layout extraction; unsupported documents are refused by extension today.
-- [ ] Web ingestion: the pluggable fetch-backend interface (ADR-024) and its `plain-fetcher` /
-      Firecrawl / Exa backends.
+- [ ] Web ingestion: crawling a whole site. The backend interface, `plain-fetcher` and
+      single-page fetch+index are done (ADR-024); `discover` needs the Firecrawl or Exa
+      backend, both of which need credentials.
 - [ ] Hardware-acceleration provider selection and local-first enforcement check.
 - [ ] Bun native-addon spike.
 - [ ] No published package or single-binary artifact — `prag` installs by `npm link` from a clone

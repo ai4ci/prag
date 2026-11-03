@@ -82,6 +82,7 @@ export function loadConfig(): DaemonConfig {
     port,
     token,
     webBackend,
+    webCooldownSeconds: config.defaults?.webCooldownSeconds,
     paths,
     ingestion: {
       // Explicit 0 disables watching; otherwise the configured size, then 1.
