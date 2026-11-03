@@ -8,8 +8,11 @@
 import chokidar from "chokidar";
 import type { FSWatcher } from "chokidar";
 import { open, readdir, stat, type FileHandle } from "node:fs/promises";
-import { join, resolve, sep } from "node:path";
-import { isBuiltinIgnored, isDenied, DEFAULT_MAX_FILE_BYTES, type GrantRow } from "@prag/core";
+import { join, relative, resolve, sep } from "node:path";
+import {
+  isBuiltinIgnored, isDenied, DEFAULT_MAX_FILE_BYTES,
+  DEFAULT_WATCH_CONFIRM_THRESHOLD, type GrantRow,
+} from "@prag/core";
 import { WorkerPool } from "./worker-pool.js";
 
 /** True when `resolved` is one of `dirs` or sits beneath one. */
@@ -23,6 +26,19 @@ import { type ProcessResult } from "./worker-pool.js";
 const BINARY_DETECTION_BYTES = 8192;
 export const DEFAULT_COOLDOWN_MS = 60_000;
 const GRANTS_CACHE_MS = 1_000;
+
+/**
+ * Runtime growth defaults (ADR-023).
+ *
+ * `maxFiles` is deliberately the same number as the `prag watch` confirmation
+ * threshold: "20,000 files is enough to ask about" should not mean two
+ * different things depending on whether the files arrived before or after
+ * registration. The byte limit exists because file count alone misses the
+ * other shape of the same accident -- a few thousand very large files.
+ */
+const DEFAULT_GROWTH_WINDOW_MS = 60_000;
+const DEFAULT_GROWTH_MAX_FILES = DEFAULT_WATCH_CONFIRM_THRESHOLD.files;
+const DEFAULT_GROWTH_MAX_BYTES = 1024 * 1024 * 1024;
 
 // ── Types ─────────────────────────────────────────────────────────────
 
@@ -44,6 +60,43 @@ export interface IngestionConfig {
   grants?: () => GrantRow[] | Promise<GrantRow[]>;
   /** Projects whose status is not 'active' (ADR-023 pause). */
   isPaused?: (projectId: string) => boolean | Promise<boolean>;
+  /**
+   * Runtime growth bound (ADR-023's confirmation threshold, applied after
+   * registration as well as at it). `0` on either limit disables that half.
+   */
+  growth?: GrowthLimits;
+  /**
+   * Called when a project's growth breaker trips. The daemon pauses the
+   * project; the queue does not know how to, and must not guess.
+   */
+  onGrowthBreach?: (breach: GrowthBreach) => void;
+}
+
+/** Runtime bound on how fast a project may grow before it is held. */
+export interface GrowthLimits {
+  /** Rolling window, ms. Default 60_000. */
+  windowMs?: number;
+  /** Files admitted within the window before the breaker trips. Default 20_000. */
+  maxFiles?: number;
+  /** Bytes admitted within the window before the breaker trips. Default 1 GiB. */
+  maxBytes?: number;
+}
+
+/** What tripped, and where to look. */
+export interface GrowthBreach {
+  projectId: string;
+  /** Which limit was exceeded first. */
+  limit: "files" | "bytes";
+  files: number;
+  bytes: number;
+  windowMs: number;
+  /**
+   * The immediate child of the project root that contributed the most bytes
+   * in this window, if the volume is concentrated in one. Almost always the
+   * directory that was moved or cloned in, which is what makes the remedy a
+   * single `prag deny` rather than a hunt.
+   */
+  topDirectory?: string;
 }
 
 export interface ProjectIngestionState {
@@ -71,6 +124,12 @@ export interface IngestionStats {
    * quietly not watching. Empty in the normal case.
    */
   watcherErrors: Record<string, string>;
+  /**
+   * Projects held by the growth breaker, with what tripped it. A held project
+   * is `paused`, so this is what distinguishes "the user paused it" from "it
+   * was paused for them".
+   */
+  growthBreaches: Record<string, GrowthBreach>;
 }
 
 // ── IngestionQueue ────────────────────────────────────────────────────
@@ -97,6 +156,19 @@ export class IngestionQueue {
   private skipCounters = new Map<string, Record<string, number>>();
   /** Last watcher error code per project; see IngestionStats.watcherErrors. */
   private watcherErrors = new Map<string, string>();
+  /** Rolling growth counters per project; see `_recordGrowth`. */
+  private growth = new Map<string, {
+    since: number; files: number; bytes: number; byDir: Map<string, number>;
+  }>();
+  /**
+   * Projects doing a walk the user already consented to -- the initial scan
+   * behind `prag watch`'s confirmation prompt, or the rescan that `prag
+   * resume` triggers. The breaker is not armed for those, or resuming a
+   * project that was held would immediately hold it again.
+   */
+  private growthSuppressed = new Set<string>();
+  /** Projects currently held by the breaker, with what tripped it. */
+  private growthBreaches = new Map<string, GrowthBreach>();
   private readyPromises = new Map<string, Promise<void>>();
   /** Registered root per project, for the pre-drain reconciliation walk. */
   private projectDirs = new Map<string, string>();
@@ -158,6 +230,8 @@ export class IngestionQueue {
       poolSize: config.poolSize ?? 1,
       grants: config.grants,
       isPaused: config.isPaused,
+      growth: config.growth,
+      onGrowthBreach: config.onGrowthBreach,
     };
   }
 
@@ -194,6 +268,13 @@ export class IngestionQueue {
       projectId,
       new Promise<void>((resolve) => { settleReady = resolve; }),
     );
+    // The initial scan is the volume the user confirmed at `prag watch`
+    // (ADR-023), so the breaker arms only once it has been ingested -- see
+    // `_armGrowthBreaker`, called at the end of the flush rather than on
+    // chokidar's `ready`. `ready` means the walk finished, not that its files
+    // have been through admission; arming there counted the confirmed scan
+    // and held the project the moment it was registered.
+    this.growthSuppressed.add(projectId);
     watcher.on("ready", settleReady);
 
     watcher.on("add", (filePath) => {
@@ -265,6 +346,9 @@ export class IngestionQueue {
     this.watchers.delete(projectId);
     this.skipCounters.delete(projectId);
     this.watcherErrors.delete(projectId);
+    this.growth.delete(projectId);
+    this.growthSuppressed.delete(projectId);
+    this.growthBreaches.delete(projectId);
     this.readyPromises.delete(projectId);
     this.projectDirs.delete(projectId);
     this.projectCooldownMs.delete(projectId);
@@ -371,6 +455,7 @@ export class IngestionQueue {
       inFlight: this.inFlight.size,
       perProject,
       watcherErrors: Object.fromEntries(this.watcherErrors),
+      growthBreaches: Object.fromEntries(this.growthBreaches),
     };
   }
 
@@ -382,6 +467,78 @@ export class IngestionQueue {
   }
 
   // ── Internal ──────────────────────────────────────────────────────
+
+  /**
+   * Count an admitted file against the project's rolling growth window, and
+   * trip the breaker if it is over.
+   *
+   * Counted here rather than at `_onEvent` for two reasons: this is the point
+   * where the real byte size is known, and it counts only files that would
+   * actually have been parsed and embedded, so a flood of denied or binary
+   * files cannot trip it.
+   *
+   * The window is a reset bucket rather than a true sliding window. A burst
+   * straddling two buckets is therefore measured as two part-bursts, which in
+   * principle lets 2x the limit through -- accepted, because the accident
+   * this guards against does not stop at the bucket boundary and trips the
+   * next one.
+   */
+  private _recordGrowth(projectId: string, filePath: string, size: number): void {
+    if (this.growthSuppressed.has(projectId)) return;
+
+    const limits = this.config.growth ?? {};
+    const windowMs = limits.windowMs ?? DEFAULT_GROWTH_WINDOW_MS;
+    const maxFiles = limits.maxFiles ?? DEFAULT_GROWTH_MAX_FILES;
+    const maxBytes = limits.maxBytes ?? DEFAULT_GROWTH_MAX_BYTES;
+    if (maxFiles <= 0 && maxBytes <= 0) return;
+
+    const now = Date.now();
+    let w = this.growth.get(projectId);
+    if (!w || now - w.since >= windowMs) {
+      w = { since: now, files: 0, bytes: 0, byDir: new Map() };
+      this.growth.set(projectId, w);
+    }
+    w.files++;
+    w.bytes += size;
+
+    // Attribute to the immediate child of the project root, which is the
+    // granularity a `prag deny` is usefully written at.
+    const root = this.projectDirs.get(projectId);
+    if (root) {
+      const rel = relative(root, resolve(filePath));
+      const top = rel.split(sep)[0];
+      if (top && top !== "..") w.byDir.set(top, (w.byDir.get(top) ?? 0) + size);
+    }
+
+    const overFiles = maxFiles > 0 && w.files > maxFiles;
+    const overBytes = maxBytes > 0 && w.bytes > maxBytes;
+    if (!overFiles && !overBytes) return;
+
+    let topDirectory: string | undefined;
+    let most = 0;
+    for (const [dir, bytes] of w.byDir) {
+      if (bytes > most) { most = bytes; topDirectory = dir; }
+    }
+    // Only name it when the volume really is concentrated; pointing at a
+    // directory holding 5% of the bytes would send the user the wrong way.
+    if (most * 2 < w.bytes) topDirectory = undefined;
+
+    const breach: GrowthBreach = {
+      projectId,
+      limit: overFiles ? "files" : "bytes",
+      files: w.files,
+      bytes: w.bytes,
+      windowMs,
+      topDirectory,
+    };
+    // Suppress immediately: the pause the daemon performs is asynchronous and
+    // the rest of this burst is already in the dirty set, so without this the
+    // breach fires once per remaining file.
+    this.growthSuppressed.add(projectId);
+    this.growthBreaches.set(projectId, breach);
+    this.growth.delete(projectId);
+    this.config.onGrowthBreach?.(breach);
+  }
 
   private _shouldIgnore(filePath: string, projectId?: string): boolean {
     // Same predicate the discovery dry run uses (ADR-023), so the counts a user
@@ -409,6 +566,13 @@ export class IngestionQueue {
     filePath: string,
     projectId: string,
   ): Promise<boolean> {
+    // Held by the breaker. Checked before `isPaused` and in memory, because
+    // the daemon's pause is a database write: without this, the rest of the
+    // burst -- already sitting in the dirty set -- would be parsed and
+    // embedded in the tens of milliseconds before the status lands, which is
+    // exactly the work the breaker exists to prevent. Nothing is lost: the
+    // files stay on disk and `prag resume` re-walks the tree.
+    if (this.growthBreaches.has(projectId)) return false;
     if (await this.config.isPaused?.(projectId)) return false;
 
     // Grants are consulted before the file is opened: `prag deny` on a secret
@@ -443,6 +607,7 @@ export class IngestionQueue {
         return false;
       }
 
+      this._recordGrowth(projectId, filePath, info.size);
       return true;
     } catch {
       this._incrementSkip(projectId, "unreadable");
@@ -516,11 +681,21 @@ export class IngestionQueue {
    * short-circuits on its content hash in `_ingestFile`.
    */
   rescan(projectId?: string): void {
+    // A full re-walk is deliberate -- `prag resume`, a branch switch -- so it
+    // is not what the breaker is looking for. Suppressed until the walk that
+    // follows finishes, and the counters are cleared so the walk does not
+    // leave a loaded window behind it.
+    const suppress = (id: string) => {
+      this.growthSuppressed.add(id);
+      this.growth.delete(id);
+      this.growthBreaches.delete(id);
+      this.reconciledAt.set(id, 0);
+    };
     if (projectId) {
-      if (this.projectDirs.has(projectId)) this.reconciledAt.set(projectId, 0);
+      if (this.projectDirs.has(projectId)) suppress(projectId);
       return;
     }
-    for (const id of this.projectDirs.keys()) this.reconciledAt.set(id, 0);
+    for (const id of this.projectDirs.keys()) suppress(id);
   }
 
   private _incrementSkip(projectId: string, reason: string): void {
@@ -703,7 +878,30 @@ export class IngestionQueue {
     }
 
     await this.drain();
+    this._armGrowthBreaker(projectId);
     return dispatched;
+  }
+
+  /**
+   * Arm the growth breaker for every project whose consented walk has now
+   * been ingested.
+   *
+   * Both suppressed cases -- the initial scan behind `prag watch`'s prompt,
+   * and the rescan behind `prag resume` -- end the same way: a flush that
+   * puts the walk's files through admission. A project held by a breach is
+   * skipped, because its suppression is the hold itself and only `rescan`
+   * clears that.
+   */
+  private _armGrowthBreaker(projectId?: string): void {
+    const ids = projectId ? [projectId] : [...this.growthSuppressed];
+    for (const id of ids) {
+      if (this.growthBreaches.has(id)) continue;
+      if (!this.growthSuppressed.delete(id)) continue;
+      // Drop the window too: the consented files must not count towards the
+      // first armed window, or a large confirmed scan would hold the project
+      // on the next handful of edits.
+      this.growth.delete(id);
+    }
   }
 
   /**

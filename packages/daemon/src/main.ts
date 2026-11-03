@@ -100,6 +100,7 @@ export function loadConfig(): DaemonConfig {
         config.ingestion?.workerPoolSize ??
         DEFAULT_POOL_SIZE,
       maxFileBytes: config.ingestion?.maxFileBytes,
+      growth: config.ingestion?.growth,
       cooldownMs: process.env.PRAG_DEBOUNCE_MS
         ? Number(process.env.PRAG_DEBOUNCE_MS)
         : config.server?.debounceMs,

@@ -56,7 +56,10 @@ import {
 import { McpHandler } from "./mcp-server.js";
 import { assertProjectRegistered } from "./project-lookup.js";
 import { WorkerPool } from "./worker-pool.js";
-import { IngestionQueue, DEFAULT_COOLDOWN_MS } from "./ingestion-queue.js";
+import {
+  IngestionQueue, DEFAULT_COOLDOWN_MS,
+  type GrowthBreach, type GrowthLimits,
+} from "./ingestion-queue.js";
 import { type ProcessResult } from "./worker-pool.js";
 
 // ── Config ────────────────────────────────────────────────────────────
@@ -159,6 +162,12 @@ export interface DaemonConfig {
     syncTimeoutMs?: number;
     /** ADR-023 admission threshold for `prag watch` on a container directory. */
     watchConfirmThreshold?: { projects: number; files: number };
+    /**
+     * ADR-023 runtime growth bound. The confirmation threshold above only
+     * applies at registration; this is the same question asked of a project
+     * that is already being watched.
+     */
+    growth?: GrowthLimits;
   };
   /** ADR-024: the selected web fetch backend, or null for local-only. */
   webBackend?: WebFetchBackend | null;
@@ -284,6 +293,8 @@ export class Daemon {
           grants: () => this._grantRows(),
           // ADR-023: a paused project stops scanning; nothing else changes.
           isPaused: (projectId) => this._projectPaused(projectId),
+          growth: ingConfig.growth,
+          onGrowthBreach: (breach) => { void this._holdProject(breach); },
         },
       );
     }
@@ -2233,6 +2244,54 @@ export class Daemon {
     };
   }
 
+  /**
+   * Hold a project whose growth breaker tripped (ADR-023).
+   *
+   * Pause, not refuse: the files stay on disk, nothing is dropped from the
+   * index, and `prag resume` re-walks the tree -- so a user who meant to add
+   * the content gets it with one command, and one who did not has time to
+   * `prag deny` the directory first. Refusing the files instead would leave
+   * the project silently under-indexed, which ADR-023 forbids.
+   *
+   * The whole project is held rather than the offending subtree because the
+   * subtree cannot be identified reliably, only guessed at; `topDirectory` is
+   * that guess, offered in the message rather than acted on.
+   */
+  private async _holdProject(breach: GrowthBreach): Promise<void> {
+    const where = breach.topDirectory ? ` Most of it is under "${breach.topDirectory}".` : "";
+    const what = breach.limit === "files"
+      ? `${breach.files.toLocaleString()} files`
+      : `${(breach.bytes / 1024 / 1024).toFixed(0)}MB`;
+    console.error(
+      `[prag] project ${breach.projectId} is on hold: ${what} arrived within ` +
+      `${Math.round(breach.windowMs / 1000)}s, which is over the ingestion growth limit.${where} ` +
+      "Nothing has been dropped. Run `prag resume " + breach.projectId + "` to index it, " +
+      "or `prag deny <path>` first to exclude it.",
+    );
+    try {
+      await this._setProjectStatus(breach.projectId, "paused");
+    } catch (err) {
+      // The breaker has already stopped admitting for this project in memory,
+      // so a failed write means the hold is not durable across a restart --
+      // worth saying, not worth crashing over.
+      console.error(`[prag] could not persist the hold on ${breach.projectId}:`, err);
+    }
+  }
+
+  /** Write a project's status and drop the cache the admission gate reads. */
+  private async _setProjectStatus(projectId: string, status: string): Promise<void> {
+    if (this.db) {
+      const escaped = projectId.replace(/'/g, "''");
+      await this.db.table("projects").update({
+        values: { status },
+        where: `projectId = '${escaped}'`,
+      });
+    }
+    // The status is read per file through a short cache; drop it so the next
+    // event sees the change rather than the next second's (ADR-023).
+    this._pausedCache = null;
+  }
+
   private async _handlePauseResume(req: IncomingMessage, res: ServerResponse, newStatus: string): Promise<void> {
     const body = await readBody(req);
     let opts: { projectId: string };
@@ -2249,17 +2308,7 @@ export class Daemon {
       return;
     }
 
-    if (this.db) {
-      const escaped = opts.projectId.replace(/'/g, "''");
-      const tbl = this.db.table("projects");
-      await tbl.update({
-        values: { status: newStatus },
-        where: `projectId = '${escaped}'`,
-      });
-    }
-    // The status is read per file through a short cache; drop it so the next
-    // event sees the change rather than the next second's (ADR-023).
-    this._pausedCache = null;
+    await this._setProjectStatus(opts.projectId, newStatus);
     if (newStatus === "active") {
       // Files written while paused were dropped at admission, and the
       // incremental mtime walk now considers them seen: force a full re-walk.

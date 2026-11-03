@@ -122,7 +122,8 @@ If present at `~/.config/prag/config.json`, the daemon loads defaults from this 
   "ingestion": {
     "workerPoolSize": 1,
     "maxFileBytes": 2097152,
-    "watchConfirmThreshold": { "projects": 25, "files": 20000 }
+    "watchConfirmThreshold": { "projects": 25, "files": 20000 },
+    "growth": { "windowMs": 60000, "maxFiles": 20000, "maxBytes": 1073741824 }
   },
   "storage": {
     "dataDir": null,
@@ -153,6 +154,34 @@ If present at `~/.config/prag/config.json`, the daemon loads defaults from this 
 another backend, since relocating egress silently is the failure ADR-024 exists to
 prevent. Credentials for a hosted backend are supplied here or by the env vars
 below; a hosted fetch backend never permits a hosted inference endpoint (ADR-006).
+
+`ingestion.growth` is the runtime half of `watchConfirmThreshold`. The
+threshold asks "is this too much to take on?" once, when you run `prag watch`;
+`growth` asks the same question of a project that is already being watched, so
+a directory moved, cloned or extracted into one does not quietly commit the
+machine to indexing it. If more than `maxFiles` files **or** `maxBytes` bytes
+are admitted within `windowMs`, the project is put **on hold**: its status
+becomes `paused`, `prag status` says why and names the directory most of the
+volume came from, and nothing is indexed until you act.
+
+Nothing is lost by a hold. The files stay on disk and the index is untouched,
+so there are two ways out:
+
+```sh
+prag resume <project>              # yes, index it
+prag deny <path> && prag resume <project>   # no, exclude it first
+```
+
+`maxFiles` defaults to the same 20,000 as `watchConfirmThreshold.files`, on
+the principle that "enough to ask about" should not mean two different things
+depending on when the files arrived. `maxBytes` catches the other shape of the
+same accident, a few thousand very large files. Set either to `0` to disable
+that half, or both to `0` to disable the breaker.
+
+The breaker is not armed during a walk you have already consented to -- the
+initial scan behind `prag watch`'s confirmation, and the rescan that `prag
+resume` triggers -- so resuming a held project cannot immediately hold it
+again.
 
 `web.crawlberg` tunes the built-in crawler. `allowPrivateNetwork` is the one to
 be careful with: left `false`, a granted public URL cannot be used to reach

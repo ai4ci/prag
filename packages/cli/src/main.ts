@@ -403,6 +403,20 @@ export async function main(): Promise<void> {
           const skipped = summarizeSkipped(counters);
           if (skipped) console.log(`  ${projectId}: ${skipped}`);
         }
+        // A held project looks exactly like a paused one in `prag projects`,
+        // so the reason has to be printed somewhere or the user is left
+        // wondering why indexing stopped.
+        for (const [projectId, b] of Object.entries(i.growthBreaches ?? {})) {
+          const what = b.limit === "files"
+            ? `${b.files.toLocaleString()} files`
+            : `${(b.bytes / 1024 / 1024).toFixed(0)}MB`;
+          const where = b.topDirectory ? ` mostly under "${b.topDirectory}";` : "";
+          console.log(
+            `  ${projectId}: ON HOLD — ${what} arrived in ` +
+            `${Math.round(b.windowMs / 1000)}s;${where} nothing dropped. ` +
+            `\`prag resume ${projectId}\` to index it, or \`prag deny <path>\` first.`,
+          );
+        }
         // A degraded watcher is the one ingestion state a user cannot infer
         // from the counters: files simply stop arriving promptly.
         for (const [projectId, code] of Object.entries(i.watcherErrors ?? {})) {

@@ -70,6 +70,14 @@ export interface HealthResponse {
     perProject: Record<string, Record<string, number>>;
     /** Projects whose watcher is degraded, with the error code (usually ENOSPC). */
     watcherErrors?: Record<string, string>;
+    /** Projects held by the ADR-023 growth breaker, with what tripped it. */
+    growthBreaches?: Record<string, {
+      limit: "files" | "bytes";
+      files: number;
+      bytes: number;
+      windowMs: number;
+      topDirectory?: string;
+    }>;
   } | null;
 }
 

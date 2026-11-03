@@ -103,6 +103,13 @@ export interface PragConfig {
     workerPoolSize?: number;
     maxFileBytes?: number;
     watchConfirmThreshold?: { projects: number; files: number };
+    /**
+     * ADR-023 runtime growth bound. `watchConfirmThreshold` asks "is this too
+     * much to take on?" at `prag watch`; this asks the same question of a
+     * project already being watched, so a directory moved or cloned into one
+     * is held rather than silently indexed. `0` on a limit disables it.
+     */
+    growth?: { windowMs?: number; maxFiles?: number; maxBytes?: number };
     /** ADR-019 bound on POST /sync (ms); default 60000. */
     syncTimeoutMs?: number;
   };

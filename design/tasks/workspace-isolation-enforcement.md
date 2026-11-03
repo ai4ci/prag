@@ -9,6 +9,8 @@ relates-to:
 tested-by:
   - coretest:ignore-scope.test.ts#ignoreScopeSuite
   - daemontest:watcher-pruning.test.ts#watcherPruningSuite
+  - daemontest:growth-breaker.test.ts#growthBreakerSuite
+  - daemontest:growth-breaker.test.ts#growthBreakerDaemonSuite
   - coretest:search-scoping.test.ts
 ---
 ## Objective
@@ -162,3 +164,83 @@ correctly, so it does not reintroduce the cost.
 recommendation: the protection the question was worried about comes from the
 built-in ignore list and from grants, both of which `filePatterns` would
 duplicate rather than add to.
+
+## 2026-11-03: the runtime growth bound, implemented
+
+The second gap above -- "a large checkout into an already-watched directory
+skips the dry run" -- is closed. `ADR-023`'s confirmation threshold now has a
+runtime counterpart, `ingestion.growth`, and the two share a default so that
+"20,000 files is enough to ask about" does not mean two different things
+depending on whether the files arrived before or after registration.
+
+### Mechanism
+
+A rolling window per project, counted in `_checkFile` -- the single admission
+gate -- on files that passed every other check. Over `maxFiles` or `maxBytes`
+within `windowMs` and the project is **held**: `projects.status = 'paused'`.
+
+Counted there rather than at `_onEvent` because that is where the real byte
+size is known and where only files that would actually have been parsed and
+embedded are counted; a flood of denied or binary files cannot trip it.
+
+### Held, not refused
+
+The distinction is the whole design. Refusing the files would leave the
+project silently under-indexed, which ADR-023 forbids. A hold keeps the files
+on disk and the index untouched, and `prag resume` re-walks and indexes them,
+so there are exactly two ways out and both are one command:
+
+```sh
+prag resume <project>                        # yes, I meant that
+prag deny <path> && prag resume <project>    # no, exclude it first
+```
+
+Pause/resume already existed end to end -- admission gate, endpoints, status
+column, and a resume that forces a full re-walk which re-reads but does not
+re-embed unchanged content. The breaker is a new trigger for an existing
+mechanism rather than a new mechanism, which is why it is small.
+
+### Four things that had to be right
+
+- **The breaker must not fire on a walk the user consented to.** Suppressed
+  for the initial scan (behind `prag watch`'s prompt) and for the rescan that
+  `prag resume` triggers -- otherwise resume is an infinite loop: resume,
+  re-walk, trip, hold. Arming happens when the *first flush completes*, not on
+  chokidar's `ready`: `ready` means the walk finished, and its files have not
+  yet been through admission. Arming on `ready` held every project the moment
+  it was registered, which a test caught.
+- **It must fire once per burst.** The rest of the burst is already in the
+  dirty set when it trips and the daemon's pause is a database write, so
+  without in-memory suppression every remaining file raised its own breach.
+- **Admission stops immediately, not when the pause lands.** `_checkFile`
+  checks the in-memory breach before `isPaused`. Without it, the tens of
+  milliseconds the status write takes were spent parsing and embedding the
+  rest of the burst -- precisely the work being prevented. Measured on a
+  30-file drop: 30 files indexed before, 4 after.
+- **Steady work must never accumulate into a hold.** The window is a reset
+  bucket, so a long-lived busy project cannot drift into one. A burst
+  straddling two buckets is measured as two part-bursts, which in principle
+  lets 2x through; accepted, because the accident does not stop at the bucket
+  boundary and trips the next one.
+
+### Where it points
+
+`GrowthBreach.topDirectory` names the immediate child of the project root
+that contributed most of the bytes, and only when the volume is genuinely
+concentrated there (over half). That is almost always the directory that was
+moved in, so the remedy is a single `prag deny` rather than a hunt. It is
+offered in the message, not acted on: the subtree cannot be identified
+reliably, only guessed at, so the whole project is held and the guess is
+advice.
+
+### What this does not do
+
+- It does not bound a project that is large **at registration** -- that is
+  `watchConfirmThreshold`'s job, and it already prompts.
+- It does not make the hold granular. A held project stops indexing entirely,
+  including the source the user actually cares about, until they resume. The
+  alternative -- holding only the offending subtree -- needs an identification
+  that cannot be made reliably.
+- It still does not decide whether `vendor/` and `third_party/` belong on the
+  built-in ignore list. That remains open above; the breaker makes getting it
+  wrong survivable rather than unnecessary.
