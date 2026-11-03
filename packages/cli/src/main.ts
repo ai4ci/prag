@@ -403,6 +403,15 @@ export async function main(): Promise<void> {
           const skipped = summarizeSkipped(counters);
           if (skipped) console.log(`  ${projectId}: ${skipped}`);
         }
+        // A degraded watcher is the one ingestion state a user cannot infer
+        // from the counters: files simply stop arriving promptly.
+        for (const [projectId, code] of Object.entries(i.watcherErrors ?? {})) {
+          console.log(code === "ENOSPC"
+            ? `  ${projectId}: WATCHER DEGRADED (ENOSPC) — out of inotify watches; ` +
+              "changes are picked up by rescan, not immediately. " +
+              "Raise fs.inotify.max_user_watches or watch a narrower directory."
+            : `  ${projectId}: WATCHER DEGRADED (${code})`);
+        }
       }
     }
     return;

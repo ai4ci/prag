@@ -68,6 +68,8 @@ export interface HealthResponse {
     cooling: number;
     inFlight: number;
     perProject: Record<string, Record<string, number>>;
+    /** Projects whose watcher is degraded, with the error code (usually ENOSPC). */
+    watcherErrors?: Record<string, string>;
   } | null;
 }
 

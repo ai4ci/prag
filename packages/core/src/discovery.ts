@@ -5,7 +5,7 @@
 // is it allowed? Two implementations of that question drift, so there is one.
 
 import { open, readdir, stat, type FileHandle } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { evaluateUriGrants, type GrantRow } from "./schema.js";
 
@@ -29,6 +29,17 @@ export const BUILTIN_IGNORED_BASENAMES = new Set([
   "__pycache__",
 ]);
 
+/** Split a path on either separator, so a Windows path is tested too. */
+function segmentsOf(filePath: string): string[] {
+  return filePath.split(/[/\\]/);
+}
+
+function isIgnoredSegment(segment: string): boolean {
+  if (!segment) return false;
+  return BUILTIN_IGNORED_BASENAMES.has(segment) ||
+    (segment.startsWith(".") && segment !== ".gitignore");
+}
+
 /**
  * Hidden files are ignored; `.gitignore` is the one exception (ADR-023).
  *
@@ -38,13 +49,26 @@ export const BUILTIN_IGNORED_BASENAMES = new Set([
  * and loose refs, and they showed up in search results. Discovery already skips
  * such directories by name while walking, so this makes the watcher agree with
  * what a user confirmed before `watch`.
+ *
+ * **`root` matters.** Tested against the whole absolute path, this said "yes"
+ * to every file in a project that merely *lives* under a hidden or
+ * conventionally-ignored ancestor: `prag watch ~/.config/notes` reported `0
+ * files` with an empty `skipped` map and indexed nothing, because `.config` is
+ * a hidden segment. Same for anything under a directory called `build`,
+ * `target` or `dist`. Only the segments *below* the project root describe the
+ * project's own layout, so only those are tested. Omitting `root` keeps the old
+ * whole-path behaviour, which is right for a caller that has no root.
  */
-export function isBuiltinIgnored(filePath: string): boolean {
-  return filePath.split("/").some((segment) => {
-    if (!segment) return false;
-    return BUILTIN_IGNORED_BASENAMES.has(segment) ||
-      (segment.startsWith(".") && segment !== ".gitignore");
-  });
+export function isBuiltinIgnored(filePath: string, root?: string): boolean {
+  let tested = filePath;
+  if (root) {
+    const rel = relative(root, filePath);
+    // `relative` returning something that climbs out means the path is not
+    // under the root at all; fall back to testing all of it rather than
+    // silently admitting it.
+    if (rel && !rel.startsWith("..") && !isAbsolute(rel)) tested = rel;
+  }
+  return segmentsOf(tested).some(isIgnoredSegment);
 }
 
 /** Why discovery excluded a file. `denied` means a grant refused it (ADR-009). */
@@ -118,7 +142,11 @@ export async function discoveryDryRun(
   limits: DiscoveryLimits = {},
 ): Promise<DryRunResult> {
   const maxFileBytes = limits.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES;
-  const ignored = limits.ignored ?? isBuiltinIgnored;
+  // Root-relative: a project under `~/.config` or inside a directory called
+  // `build` is a project, not a thing to skip. Only the layout below the root
+  // is the project's own.
+  const rootPath = resolve(root);
+  const ignored = limits.ignored ?? ((p: string) => isBuiltinIgnored(p, rootPath));
   const threshold = limits.threshold ?? DEFAULT_WATCH_CONFIRM_THRESHOLD;
 
   const result: DryRunResult = {
@@ -134,7 +162,6 @@ export async function discoveryDryRun(
     result.skipped[reason] = (result.skipped[reason] ?? 0) + 1;
   };
 
-  const rootPath = resolve(root);
   let rootIsRepo = false;
   const stack = [rootPath];
   while (stack.length > 0) {

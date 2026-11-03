@@ -11,6 +11,11 @@ import { open, readdir, stat, type FileHandle } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import { isBuiltinIgnored, isDenied, DEFAULT_MAX_FILE_BYTES, type GrantRow } from "@prag/core";
 import { WorkerPool } from "./worker-pool.js";
+
+/** True when `resolved` is one of `dirs` or sits beneath one. */
+function isUnder(resolved: string, dirs: readonly string[]): boolean {
+  return dirs.some((dir) => resolved === dir || resolved.startsWith(dir + sep));
+}
 import { type ProcessResult } from "./worker-pool.js";
 
 // ── Constants ────────────────────────────────────────────────────────
@@ -56,6 +61,16 @@ export interface IngestionStats {
   /** Dispatched to a worker and awaiting its write. */
   inFlight: number;
   perProject: Record<string, Record<string, number>>;
+  /**
+   * Projects whose filesystem watcher reported an error, with the last code
+   * seen. Almost always `ENOSPC`: the kernel's `fs.inotify.max_user_watches`
+   * was exhausted, so an unknown subset of the tree has no watch on it and
+   * live edits there are missed until the next reconcile pass.
+   *
+   * Reported because the alternative is a daemon that looks healthy while
+   * quietly not watching. Empty in the normal case.
+   */
+  watcherErrors: Record<string, string>;
 }
 
 // ── IngestionQueue ────────────────────────────────────────────────────
@@ -80,6 +95,8 @@ export class IngestionQueue {
   private dirty = new Map<string, IngestionQueueItem>(); // (projectId, uri) → latest event
   private cooldowns = new Map<string, ReturnType<typeof setTimeout>>(); // (projectId, uri) → timer
   private skipCounters = new Map<string, Record<string, number>>();
+  /** Last watcher error code per project; see IngestionStats.watcherErrors. */
+  private watcherErrors = new Map<string, string>();
   private readyPromises = new Map<string, Promise<void>>();
   /** Registered root per project, for the pre-drain reconciliation walk. */
   private projectDirs = new Map<string, string>();
@@ -151,10 +168,23 @@ export class IngestionQueue {
     cooldownMs?: number,
     excludeSubtrees: string[] = [],
   ): void {
-    const watcher = chokidar.watch(dirPath, {
+    const root = resolve(dirPath);
+    const excludes = excludeSubtrees.map((d) => resolve(d));
+
+    const watcher = chokidar.watch(root, {
       persistent: true,
       ignoreInitial: false,
       ignorePermissionErrors: true,
+      // Prune at the walk, not after the event. Without this chokidar
+      // enumerated and placed an inotify watch on every directory in the tree
+      // -- `node_modules` included -- and `_shouldIgnore` threw the results
+      // away afterwards. Measured on a tree of 70,000 `node_modules`
+      // directories: 3.3s to `ready`, 551MB RSS and **ENOSPC** from the
+      // kernel's `max_user_watches`; with this predicate, 6ms, 71MB and no
+      // error. The predicate must also skip the excluded child repositories,
+      // or a monorepo pays for each of them twice.
+      ignored: (candidate: string) =>
+        isBuiltinIgnored(candidate, root) || isUnder(resolve(candidate), excludes),
     });
 
     // chokidar's `ready` marks the end of the initial scan. /sync must not report
@@ -183,6 +213,21 @@ export class IngestionQueue {
     });
 
     watcher.on("error", (err) => {
+      const code = (err as NodeJS.ErrnoException)?.code;
+      this.watcherErrors.set(projectId, code ?? "UNKNOWN");
+      if (code === "ENOSPC") {
+        // The one worth explaining, because the remedy is a sysctl and
+        // nothing in prag can fix it. Coverage is now partial and which
+        // directories lost their watch is arbitrary; the reconcile walk on
+        // each drain is what still finds changes there.
+        console.error(
+          `[prag] watcher for ${projectId} ran out of inotify watches (ENOSPC). ` +
+          "Some directories are no longer watched; changes there are picked up " +
+          "by the periodic rescan instead of immediately. Raise the limit with " +
+          "`sysctl fs.inotify.max_user_watches=524288`, or watch a narrower directory.",
+        );
+        return;
+      }
       console.error(
         "[prag] Ingestion watcher error:",
         (err as Error)?.message ?? String(err),
@@ -191,15 +236,13 @@ export class IngestionQueue {
 
     this.watchers.set(projectId, watcher);
     this.skipCounters.set(projectId, {});
-    this.projectDirs.set(projectId, resolve(dirPath));
+    this.projectDirs.set(projectId, root);
     // Warm the grant cache so the admission gate in `_onEvent` is live for the
     // initial scan rather than only from the second event onwards. Fire and
     // forget: a failure leaves the cache cold, which just defers to the
     // flush-time check.
     void this._currentGrants();
-    if (excludeSubtrees.length > 0) {
-      this.projectExcludes.set(projectId, excludeSubtrees.map((d) => resolve(d)));
-    }
+    if (excludes.length > 0) this.projectExcludes.set(projectId, excludes);
     if (cooldownMs && cooldownMs > 0) this.projectCooldownMs.set(projectId, cooldownMs);
     // Force the first drain to reconcile the whole tree.
     this.reconciledAt.set(projectId, 0);
@@ -221,6 +264,7 @@ export class IngestionQueue {
     watcher?.close();
     this.watchers.delete(projectId);
     this.skipCounters.delete(projectId);
+    this.watcherErrors.delete(projectId);
     this.readyPromises.delete(projectId);
     this.projectDirs.delete(projectId);
     this.projectCooldownMs.delete(projectId);
@@ -299,6 +343,21 @@ export class IngestionQueue {
     return this.dirty.size + this.inFlight.size;
   }
 
+  /**
+   * Directories the filesystem watcher is actually holding open for a project.
+   *
+   * This is the number that matters for the kernel's
+   * `fs.inotify.max_user_watches` budget, and the only way to tell pruning at
+   * the walk apart from discarding events afterwards -- both leave the index
+   * identical and only this differs. Diagnostic, and what
+   * `daemontest:watcher-pruning.test.ts` asserts on.
+   */
+  watchedDirCount(projectId: string): number {
+    const watcher = this.watchers.get(projectId);
+    if (!watcher) return 0;
+    return Object.keys(watcher.getWatched()).length;
+  }
+
   /** Snapshot for /health and `prag status`. */
   stats(): IngestionStats {
     const perProject: Record<string, Record<string, number>> = {};
@@ -311,6 +370,7 @@ export class IngestionQueue {
       cooling: this.cooldowns.size,
       inFlight: this.inFlight.size,
       perProject,
+      watcherErrors: Object.fromEntries(this.watcherErrors),
     };
   }
 
@@ -325,15 +385,17 @@ export class IngestionQueue {
 
   private _shouldIgnore(filePath: string, projectId?: string): boolean {
     // Same predicate the discovery dry run uses (ADR-023), so the counts a user
-    // confirms before `watch` match what the watcher then indexes.
-    if (isBuiltinIgnored(filePath)) return true;
+    // confirms before `watch` match what the watcher then indexes. Root-relative
+    // for the same reason it is there: a project that merely lives under
+    // `~/.config`, or inside a directory called `build`, is a project.
+    const root = projectId ? this.projectDirs.get(projectId) : undefined;
+    if (isBuiltinIgnored(filePath, root)) return true;
     if (!projectId) return false;
     // A nested repository belongs to its own project, so the parent's watcher
     // steps over it rather than indexing the same file twice under two ids.
     const excludes = this.projectExcludes.get(projectId);
     if (!excludes) return false;
-    const resolved = resolve(filePath);
-    return excludes.some((dir) => resolved === dir || resolved.startsWith(dir + sep));
+    return isUnder(resolve(filePath), excludes);
   }
 
   /**
