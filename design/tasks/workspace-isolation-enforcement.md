@@ -2,7 +2,7 @@
 class: task
 id: workspace-isolation-enforcement.md
 title: Enforce project-scoped query and storage isolation across workspaces
-status: blocked
+status: done
 priority: medium
 relates-to:
   - feature:workspace-isolation.md
@@ -244,3 +244,28 @@ advice.
 - It still does not decide whether `vendor/` and `third_party/` belong on the
   built-in ignore list. That remains open above; the breaker makes getting it
   wrong survivable rather than unnecessary.
+
+
+## Closed 2026-11-03: `filePatterns` dropped, and the real gaps fixed
+
+The maintainer chose option 1. `filePatterns` is removed from
+`feature:workspace-isolation.md` with the reasoning recorded there, so
+requirement 3 has nothing left to verify: grants are the single filter, as
+ADR-009 intended.
+
+The question it prompted -- "then what stops the indexer being handed
+gigabytes?" -- was the valuable part, and the answer turned out to be four
+defects and one missing bound, all recorded above and all fixed:
+
+1. chokidar walked and watched ignored subtrees, discarding the events
+   afterwards (ENOSPC on a large tree).
+2. `isBuiltinIgnored` tested the absolute path, so a project under a hidden
+   or conventionally-named ancestor indexed nothing and said nothing.
+3. `node_modules` was not ignored on Windows.
+4. A watcher degraded by ENOSPC was invisible: `/health` stayed green.
+5. No runtime growth bound existed at all; `ingestion.growth` is it.
+
+`vendor/`, `third_party/`, `Pods/` and `bower_components` stay indexable, by
+decision: Go projects routinely want `vendor/` searchable, silently excluding
+it is the under-indexing ADR-023 forbids, and `prag deny` is explicit and
+visible. The growth breaker makes getting that wrong survivable.
