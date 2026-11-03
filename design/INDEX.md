@@ -106,7 +106,6 @@ _(no results)_
 
 - [Implement the ingestion worker pool with main-thread embedding and writes](tasks/ingestion-worker-pool.md)
 - [Maintain the test fixture corpus and git fixture builder](tasks/test-fixture-corpus.md)
-- [Construct thread-safe background queue with Chokidar debouncing](tasks/daemon-ingestion-queue.md)
 - [Build Tree-sitter and LiteParse parser routing in @prag/daemon](tasks/daemon-parser-router.md)
 - [Implement LiteParse layout-preserving PDF/DOCX to Markdown pipeline](tasks/liteparse-document-pipeline.md)
 - [Implement hardware acceleration provider selection and local-first enforcement](tasks/local-first-enforcement.md)

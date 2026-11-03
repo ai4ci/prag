@@ -192,6 +192,11 @@ export class IngestionQueue {
     this.watchers.set(projectId, watcher);
     this.skipCounters.set(projectId, {});
     this.projectDirs.set(projectId, resolve(dirPath));
+    // Warm the grant cache so the admission gate in `_onEvent` is live for the
+    // initial scan rather than only from the second event onwards. Fire and
+    // forget: a failure leaves the cache cold, which just defers to the
+    // flush-time check.
+    void this._currentGrants();
     if (excludeSubtrees.length > 0) {
       this.projectExcludes.set(projectId, excludeSubtrees.map((d) => resolve(d)));
     }
@@ -395,6 +400,19 @@ export class IngestionQueue {
    */
   private _grantsCache: { at: number; rows: GrantRow[] } | null = null;
 
+  /**
+   * Grants already in hand, or null when the cache is cold or stale.
+   *
+   * Synchronous on purpose: it is read from the chokidar handler, which must
+   * not await. A null here means "do not know yet", never "allowed" -- the
+   * flush-time check in `_checkFile` is still authoritative.
+   */
+  private _cachedGrants(): GrantRow[] | null {
+    const c = this._grantsCache;
+    if (!c) return null;
+    return Date.now() - c.at < GRANTS_CACHE_MS ? c.rows : null;
+  }
+
   private async _currentGrants(): Promise<GrantRow[] | null> {
     const load = this.config.grants;
     if (!load) return null;
@@ -464,6 +482,24 @@ export class IngestionQueue {
     // reconciles it; reporting it as pending is what pendingCount() still does.
     if (this._closing) return;
     const uri = resolve(filePath);
+
+    // ADR-009 §1: a denied path is refused at admission, not after it has
+    // occupied a debounce timer and been dispatched. Only the *policy* half of
+    // `_checkFile` runs here -- it is in-memory and cheap. The content probe
+    // (size, empty, binary) stays at flush: it is file I/O, debouncing exists
+    // precisely to do it once per burst instead of once per event, and it must
+    // see the file as it is when the work actually runs.
+    //
+    // A cold or stale cache returns null, meaning "not known yet", and the file
+    // is admitted for the flush-time check to judge. This gate can only reject
+    // earlier than before; it can never admit something that was previously
+    // refused.
+    const known = this._cachedGrants();
+    if (known && isDenied(uri, known)) {
+      this._incrementSkip(projectId, "denied");
+      return;
+    }
+
     const key = queueKey(projectId, uri);
 
     // Update dirty set with latest event type

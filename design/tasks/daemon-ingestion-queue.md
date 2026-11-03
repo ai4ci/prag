@@ -2,7 +2,7 @@
 class: task
 id: daemon-ingestion-queue.md
 title: Construct thread-safe background queue with Chokidar debouncing
-status: in_progress
+status: done
 priority: medium
 relates-to:
   - feature:background-worker-queue.md
@@ -13,6 +13,7 @@ addressed-by:
   - src:daemon/src/ingestion-queue.ts#ProjectIngestionState
 tested-by:
   - daemontest:ingestion-queue.test.ts#ingestionQueueSuite
+  - daemontest:admission-ordering.test.ts
 ---
 ## Objective
 Construct a thread-safe background ingestion worker queue in `@prag/daemon` with filesystem event debouncing.
@@ -25,22 +26,31 @@ Construct a thread-safe background ingestion worker queue in `@prag/daemon` with
 
 ## Implementation status
 
-Re-audited 2026-11-02. Still `in_progress`; most of the previous audit is now stale.
+Complete as of 2026-11-03.
 
 - **Cooldown lease — DONE.** `file_mapping.validUntil` is written from
-  `cooldownExpiry()` (`daemon.ts:554,606`) rather than left null, so the lease
-  survives a restart (ADR-008/ADR-023).
-- **Grants gate admission — DONE.** `_checkFile` consults the grants table, so
-  the watcher no longer bypasses the engine.
+  `cooldownExpiry()`, so the lease survives a restart (ADR-008/ADR-023).
+- **Grants gate admission — DONE.** `_checkFile` consults the grants table.
 - **Pause — DONE.** Admission reads project status.
-- **`close()` — DONE.** Awaits its closers (`ingestion-queue.ts:227`) instead of
-  discarding pending work.
-- **Dispatch — DONE.** `/sync` is a real drain barrier; see
-  `task:sync-drain-barrier.md`.
+- **`close()` — DONE.** Awaits its closers rather than discarding pending work.
+- **Dispatch — DONE.** `/sync` is a real drain barrier
+  (`task:sync-drain-barrier.md`).
+- **Queue identity — DONE.** `dirty` and `cooldowns` are keyed by
+  `(projectId, uri)`, not uri alone
+  (`issue:ingestion-dirty-set-keyed-by-uri-alone.md`).
+- **Admission ordering — DONE.** A denied path is now refused in `_onEvent`,
+  before it takes a slot in the dirty set and holds a debounce timer, and the
+  `denied` counter increments there so `prag status` can explain the absence.
 
-Outstanding:
+Only the policy half moved. The content probe (size, empty, binary) stays at
+flush deliberately: it is file I/O, debouncing exists to run it once per burst
+rather than once per event, and it must see the file as it is when the work
+actually runs rather than when the event arrived. ADR-009 §1 is about grants
+("a `prag deny` on a secret means prag never reads it"), and that is the part
+that had to move.
 
-- **Filters run after enqueue, not before — PARTIAL.** `_checkFile` is called at
-  flush time (`ingestion-queue.ts:493,557`), so a file that will be skipped is
-  still queued and holds a debounce timer until it drains. Efficiency and
-  accounting, not correctness: the file is still filtered before any work.
+The gate reads an in-memory grant cache, warmed when a project registers. A
+cold or stale cache returns "not known yet" and the file is admitted for the
+flush-time check, which remains authoritative -- so the gate can only ever
+reject earlier, never admit something previously refused. Both paths are
+covered by `daemontest:admission-ordering.test.ts`.
