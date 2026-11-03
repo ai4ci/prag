@@ -78,3 +78,26 @@ can crawl yet, so it is refused by name rather than half-built.
 - **Crawl / `discover` ingestion.** Needs a backend with the capability, which
   is `task:firecrawl-backend.md` / `task:exa-backend.md`, both parked on
   credentials.
+
+## Update 2026-11-03: crawlberg resolves two of the three parked points
+
+`@xberg-io/crawlberg` is registered as a built-in backend (ADR-024 addendum,
+`src:daemon/src/crawlberg-backend.ts`).
+
+- **"HTML becomes text, not Markdown" is resolved.** crawlberg emits real
+  Markdown -- headings, lists, tables, emphasis -- with page chrome stripped,
+  so the `page.md` pseudo path now routes to the heading chunker for a
+  document that genuinely has headings, rather than as a trick to get prose
+  into a Markdown splitter. Asserted in
+  `daemontest:crawlberg-backend.test.ts`.
+- **A bare origin no longer dead-ends.** crawlberg declares `discover`, so
+  registering a site resolves rather than reporting
+  `CRAWL_CAPABILITY_UNAVAILABLE` with no backend able to satisfy it.
+  `discover` returns the site's URLs; **ingesting them is still not done** --
+  the fan-out from a URL list to per-page `ingestWebUri` calls, bounded by
+  ADR-023's concurrency cap, remains unwritten. That is the real remaining
+  work here, and it is no longer blocked on credentials.
+- **Fetch vs crawl decided from the URL still stands as a guess.** Unchanged
+  and still worth a second opinion: a bare origin means the site, a path means
+  one document. Now that `discover` has a provider the rule is actually
+  reachable, so getting it wrong has consequences it did not have before.
