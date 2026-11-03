@@ -87,7 +87,7 @@ The bearer token comes from `PRAG_API_KEY`; unset, it defaults to `guest` and pr
 ### Verify your install
 
 ```bash
-npm test        # 92 core + 120 daemon + 33 cli (spawned daemons, ~45s;
+npm test        # 101 core + 120 daemon + 33 cli (spawned daemons, ~45s;
 #                 PRAG_TEST_MODE=in-process is faster where loopback to a child is blocked)
 npm run lint
 ```

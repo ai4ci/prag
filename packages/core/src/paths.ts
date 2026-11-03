@@ -106,6 +106,17 @@ export interface PragConfig {
     /** ADR-019 bound on POST /sync (ms); default 60000. */
     syncTimeoutMs?: number;
   };
+  /**
+   * ADR-024: the web fetch backend. Absent means no backend, and every
+   * non-`file://` grant is refused -- which is the default and keeps the
+   * install local-only. A backend is never selected implicitly.
+   */
+  web?: {
+    /** Backend id, e.g. "plain-fetcher". Unknown ids fail at startup. */
+    backend?: string;
+    firecrawl?: { url?: string; apiKey?: string };
+    exa?: { apiKey?: string };
+  };
   storage?: {
     dataDir?: string | null;
     runDir?: string | null;

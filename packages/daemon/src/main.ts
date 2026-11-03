@@ -22,6 +22,7 @@ import {
   type EmbeddingProvider,
   type PragConfig,
   type PragPaths,
+  resolveWebBackend,
 } from "@prag/core";
 import { join } from "node:path";
 import { writeFileSync, chmodSync, mkdirSync } from "node:fs";
@@ -69,9 +70,18 @@ export function loadConfig(): DaemonConfig {
   const port = readIntEnv("PRAG_PORT") ?? config.server?.port ?? DEFAULT_PORT;
   const token = process.env.PRAG_API_KEY ?? "guest";
 
+  // ADR-024: exactly one backend, or none. An unknown id throws here, before
+  // the port is bound, so a typo is a startup failure naming the valid ids
+  // rather than a silent fallback to a different egress path.
+  const webBackend = resolveWebBackend(
+    process.env.PRAG_WEB_BACKEND?.trim() || config.web?.backend,
+    { firecrawl: config.web?.firecrawl, exa: config.web?.exa },
+  );
+
   return {
     port,
     token,
+    webBackend,
     paths,
     ingestion: {
       // Explicit 0 disables watching; otherwise the configured size, then 1.

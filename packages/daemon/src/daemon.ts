@@ -44,6 +44,8 @@ import {
   DEFAULT_MAX_VECTOR_UNIT_TOKENS,
   DEFAULT_VECTOR_UNIT_OVERLAP_TOKENS,
   API_VERSION,
+  requireCapability,
+  type WebFetchBackend,
 } from "@prag/core";
 
 import { McpHandler } from "./mcp-server.js";
@@ -127,6 +129,8 @@ export interface DaemonConfig {
     /** ADR-023 admission threshold for `prag watch` on a container directory. */
     watchConfirmThreshold?: { projects: number; files: number };
   };
+  /** ADR-024: the selected web fetch backend, or null for local-only. */
+  webBackend?: WebFetchBackend | null;
   /** Model id the daemon embeds with (resolved by bootstrap). */
   embeddingModel?: string;
   /** ADR-014 window size; clamped to the model ceiling by bootstrap. */
@@ -788,6 +792,12 @@ export class Daemon {
       // and a user who cannot see that assumes they are getting acceleration
       // they are not (task:local-first-enforcement.md). `null` before the
       // model has loaded, or for a provider with no device concept.
+      // ADR-024 §2: the current egress path is always inspectable, even when
+      // it is "none".
+      webBackend: this.config.webBackend
+        ? { id: this.config.webBackend.id, endpoint: this.config.webBackend.endpoint,
+            capabilities: [...this.config.webBackend.capabilities].sort() }
+        : null,
       embeddingDevice:
         (this.embedder as { activeDevice?: string | null } | null)?.activeDevice ?? null,
       maxVectorUnitTokens: this._options.maxVectorUnitTokens ?? null,
@@ -1070,10 +1080,19 @@ export class Daemon {
       throw new DaemonFailure("INVALID_REQUEST", "'uri' is required");
     }
     if (!rootUri.startsWith("file://")) {
+      // ADR-024: watching a prefix is a `discover`, not a `fetch` -- a
+      // fetch-only backend must say so by name rather than quietly indexing
+      // the single page the user pointed at. `requireCapability` also covers
+      // the no-backend case, which is the same refusal to a user.
+      requireCapability(this.config.webBackend ?? null, "discover", rootUri);
+      // The pipeline itself is task:web-ingestion-pipeline.md. Until it
+      // exists, a capable backend still cannot be acted on, and saying that
+      // plainly beats pretending the grant was accepted.
       throw new DaemonFailure(
         "CRAWL_BACKEND_REQUIRED",
-        `no web fetch backend is configured to watch ${rootUri}`,
-        "Set web.backend in config.json or PRAG_WEB_BACKEND, or watch a file:// URI",
+        `web ingestion is not implemented yet, so ${rootUri} cannot be watched`,
+        "Watch a file:// URI. Tracked by task:web-ingestion-pipeline.md.",
+        { uri: rootUri, backend: this.config.webBackend?.id ?? null },
       );
     }
 

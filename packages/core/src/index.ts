@@ -131,3 +131,21 @@ export {
   type PragConfig,
 } from "./paths.js";
 
+
+// ADR-024: web fetch backends. Importing plain-fetcher registers the
+// zero-configuration built-in, so `web.backend: "plain-fetcher"` resolves
+// without the caller wiring anything up.
+export {
+  registerWebBackend,
+  resolveWebBackend,
+  availableWebBackends,
+  requireCapability,
+  type WebFetchBackend,
+  type WebCapability,
+  type WebFetchResult,
+  type WebDiscoverResult,
+  type WebSearchResult,
+  type WebBackendConfig,
+  type FreshnessHint,
+} from "./web-backend.js";
+export { PLAIN_FETCHER_ID, htmlToText } from "./plain-fetcher.js";

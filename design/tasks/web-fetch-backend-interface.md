@@ -2,7 +2,7 @@
 class: task
 id: web-fetch-backend-interface.md
 title: Define the capability-negotiating web fetch backend interface
-status: todo
+status: in_progress
 priority: medium
 relates-to:
   - feature:web-and-nonlocal-content.md
@@ -10,6 +10,8 @@ blocks:
   - task:web-ingestion-pipeline.md
   - task:firecrawl-backend.md
   - task:exa-backend.md
+tested-by:
+  - coretest:web-backend.test.ts
 ---
 ## Objective
 Define and ship the `WebFetchBackend` interface from ADR-024, with the three
@@ -45,3 +47,54 @@ built-ins and capability reporting, so ingestion code never names a vendor.
 - Unit tests drive each built-in and the stub; the capability-missing error is
   asserted by `code`, not message text (ADR-022).
 - Running the suite with the network disabled is indistinguishable from a normal run.
+
+## Implementation status 2026-11-03
+
+The interface, the built-in backend and selection are done. Two requirements
+belong to the pipeline task and are noted below rather than half-built.
+
+- **Backend interface — DONE.** `core/src/web-backend.ts` exports
+  `WebFetchBackend` with `id`, `endpoint`, a `capabilities` set over
+  `fetch`/`discover`/`search`, and a `freshnessHint` on every result
+  (`live` vs `cached`, with an age when the backend reports one). The hint is
+  not cosmetic: ADR-008's leases cannot be set honestly without knowing which
+  it was.
+- **`plain-fetcher` — DONE.** `fetch` only, standard library, no dependency,
+  no third party in the path. It reports its endpoint as "(direct to origin)"
+  because that is what it is, and always reports `live` freshness because it
+  holds no cache and claiming otherwise would be a lie the leases act on. The
+  payload is capped while reading rather than after, so a huge response does
+  not cost the memory before being rejected.
+- **Exactly one backend, never implicit — DONE.** `resolveWebBackend` returns
+  null for no configuration (local-only, the default) and throws at startup
+  for an unknown id, naming the valid ids. A typo cannot silently route egress
+  somewhere the user did not choose.
+- **`PragConfig.web` — DONE.** `backend`, `firecrawl.url`, `firecrawl.apiKey`,
+  `exa.apiKey`, read through `loadPragConfig`, with `PRAG_WEB_BACKEND`
+  overriding the file.
+- **Capability refusal — DONE.** `requireCapability` throws
+  `CRAWL_CAPABILITY_UNAVAILABLE` naming the missing capability and which
+  registered backends provide it; no backend at all is
+  `CRAWL_BACKEND_REQUIRED`. `/projects/watch` on a non-`file://` URI now asks
+  for `discover`, not `fetch`: watching a prefix is a crawl, and a fetch-only
+  backend must say so rather than quietly indexing the one page.
+- **Backend visible in `GET /health` — DONE.** id, endpoint and capabilities,
+  or `null`. ADR-024 §2 requires the egress path be inspectable, including
+  when it is "none".
+- **Stub backend, no egress — DONE.** `coretest:web-backend.test.ts` drives a
+  stub for capability negotiation and a loopback server for the fetcher. No
+  test makes an outbound call, and the capability error is asserted by `code`
+  (ADR-022), never by message text.
+
+### Belongs to `task:web-ingestion-pipeline.md`
+
+- Re-evaluating every backend-returned URL against the grants table before
+  writing (allow-parent plus deny-child), and applying
+  `ingestion.maxFileBytes` to backend payloads on the ingestion path. The
+  backend takes a `maxBytes` and honours it; wiring the configured value
+  through, and the grant re-check, happen where content is written, which does
+  not exist yet.
+
+`/projects/watch` therefore still refuses every non-`file://` URI, but now
+with a reason that distinguishes "no backend", "backend cannot crawl" and
+"ingestion not implemented" instead of collapsing all three.
