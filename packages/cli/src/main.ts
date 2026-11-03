@@ -386,6 +386,13 @@ export async function main(): Promise<void> {
         const device = h.embeddingDevice ? `, ${h.embeddingDevice}` : "";
         console.log(`Embedding: ${h.embeddingModel} (${h.embeddingDim}d${device})`);
       }
+      // ADR-024 requires the egress path be inspectable. "none" is the
+      // interesting case, not an omission: it is what says the install sends
+      // nothing anywhere, so it is printed rather than left blank.
+      console.log(h.webBackend
+        ? `Web: ${h.webBackend.id} -> ${h.webBackend.endpoint} ` +
+          `(${h.webBackend.capabilities.join(", ")})`
+        : "Web: none (local content only)");
       if (h.ingestion) {
         const i = h.ingestion;
         console.log(`Ingestion: ${i.projects} watched, ${i.dirty} queued, ` +

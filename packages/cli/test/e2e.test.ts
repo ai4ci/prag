@@ -39,6 +39,31 @@ function cLIEndToEndSuite(): void {
     assert.equal(summarizeSkipped({ binary: 0 }), "");
   });
 
+  void it("`prag status` names the egress path, including when there is none", async () => {
+    // ADR-024: the selected backend must always be inspectable. The harness
+    // configures none, which is the case worth printing -- a blank line here
+    // would leave a user unable to tell "local only" from "not reported".
+    const { stdout, exitCode } = await runCLI(["status"], env);
+    assert.equal(exitCode, 0, `exit ${exitCode}\n${stdout}`);
+    assert.match(stdout, /^Web: none \(local content only\)$/m, `stdout:\n${stdout}`);
+  });
+
+  void it("captures stdout on more than the first runCLI call", async () => {
+    // The harness installed a fresh capture stream per call, but Node's
+    // global `console` resolves `process.stdout` once and keeps the stream it
+    // found. So only the first call in a process captured anything, and every
+    // later assertion on stdout saw "". Nothing caught it because the other
+    // tests here assert only on the exit code.
+    const first = await runCLI(["status"], env);
+    const second = await runCLI(["status"], env);
+    assert.ok(first.stdout.length > 0, "the first call captured nothing");
+    assert.ok(second.stdout.length > 0,
+      "a second runCLI call captured no stdout; the capture stream was swapped out " +
+      "from under console");
+    // ...and each call gets its own buffer rather than accumulating.
+    assert.equal(second.stdout, first.stdout);
+  });
+
   void it("daemon status returns running info", async () => {
     const { stdout, exitCode } = await runCLI(["daemon", "status"], env);
     assert.equal(exitCode, 0, `exit ${exitCode}`);

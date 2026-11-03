@@ -55,6 +55,12 @@ export interface HealthResponse {
   embeddingDim?: number;
   /** Execution provider actually in use ("cpu", "cuda", ...), once the model has loaded. */
   embeddingDevice?: string | null;
+  /**
+   * ADR-024: the selected web fetch backend, or null when none is configured
+   * and the install is local-only. Reported so the current egress path is
+   * always inspectable from the CLI.
+   */
+  webBackend?: { id: string; endpoint: string; capabilities: string[] } | null;
   /** Live ingestion counters, absent when ingestion is disabled. */
   ingestion?: {
     projects: number;

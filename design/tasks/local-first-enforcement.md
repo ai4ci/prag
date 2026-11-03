@@ -95,9 +95,20 @@ than it gives.
 
 ### Remaining
 
-- **Report the active web backend in `GET /health` and `prag status`.** The
-  backend is already in the `/health` payload (`daemon.ts`, `webBackend`:
-  id, endpoint, capabilities); what is missing is `prag status` printing it.
+- ~~**Report the active web backend in `GET /health` and `prag status`.**~~
+  Done. `/health` already carried `webBackend` (id, endpoint, capabilities);
+  `prag status` now prints it, and prints `Web: none (local content only)`
+  when none is configured -- which is the case worth stating, since a blank
+  line leaves a user unable to tell "local only" from "not reported".
+
+  Writing the test for it surfaced a defect in the CLI test harness: it
+  installed a fresh capture stream per `runCLI` call, but Node's global
+  `console` resolves `process.stdout` once and keeps the stream it found, so
+  **only the first call in a process captured anything**. Every later
+  assertion on stdout would have seen `""`. Nothing caught it because every
+  other test in the file asserts on the exit code alone. Fixed by keeping one
+  long-lived stream and resetting its buffer, with a test that makes two calls
+  and asserts both capture.
 - ~~**Test that a configured-but-unreachable web backend cannot fail a local
   search or emit a request (ADR-024).**~~ Done, by the behavioural assertion
   above: the backend is configured and never reached, so whether it is
