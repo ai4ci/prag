@@ -53,6 +53,8 @@ export interface HealthResponse {
   runDir: string;
   embeddingModel?: string;
   embeddingDim?: number;
+  /** Execution provider actually in use ("cpu", "cuda", ...), once the model has loaded. */
+  embeddingDevice?: string | null;
   /** Live ingestion counters, absent when ingestion is disabled. */
   ingestion?: {
     projects: number;

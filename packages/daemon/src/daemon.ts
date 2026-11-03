@@ -783,6 +783,13 @@ export class Daemon {
       // ADR-016: what is loaded, so a client can tell a fake index from a real one.
       embeddingModel: this.embedder?.model ?? null,
       embeddingDim: this.embedder?.dim ?? null,
+      // The execution provider actually in use, not the one requested: a
+      // configured accelerator that failed to initialise falls back to CPU,
+      // and a user who cannot see that assumes they are getting acceleration
+      // they are not (task:local-first-enforcement.md). `null` before the
+      // model has loaded, or for a provider with no device concept.
+      embeddingDevice:
+        (this.embedder as { activeDevice?: string | null } | null)?.activeDevice ?? null,
       maxVectorUnitTokens: this._options.maxVectorUnitTokens ?? null,
       ingestion: this.ingestionQueue ? this.ingestionQueue.stats() : null,
       ...(this._mismatch

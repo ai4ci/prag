@@ -67,7 +67,15 @@ export class OnnxEmbeddingProvider implements EmbeddingProvider {
   readonly tokenizer: Tokenizer;
 
   private readonly dtype: string;
+  /** The device asked for. What is actually in use is `activeDevice`. */
   private readonly device: string;
+  /**
+   * The execution provider actually in use, known only after `load()`.
+   * `null` before then; `"cpu"` after a fallback. Reported by `GET /health`
+   * so a user can see that their accelerator was not picked up, rather than
+   * silently getting CPU speed and assuming otherwise.
+   */
+  activeDevice: string | null = null;
   private extractor: Extractor | null = null;
   private loading: Promise<void> | null = null;
   private readonly forcedMaxSeq: number | undefined;
@@ -117,10 +125,29 @@ export class OnnxEmbeddingProvider implements EmbeddingProvider {
       env.allowRemoteModels = false;
     }
 
-    const extractor = (await pipeline("feature-extraction", this.modelId, {
-      dtype: this.dtype as "q8",
-      device: this.device as "cpu",
-    })) as unknown as Extractor;
+    let extractor: Extractor;
+    try {
+      extractor = (await pipeline("feature-extraction", this.modelId, {
+        dtype: this.dtype as "q8",
+        device: this.device as "cpu",
+      })) as unknown as Extractor;
+      this.activeDevice = this.device;
+    } catch (err) {
+      // Graceful fallback to CPU: an accelerator that is configured but not
+      // usable must not stop the daemon serving. It is logged rather than
+      // swallowed, because silently running 10x slower than the user believes
+      // is its own kind of failure.
+      if (this.device === "cpu") throw err;
+      console.error(
+        `[prag] embedding device "${this.device}" failed to initialise, ` +
+          `falling back to cpu: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      extractor = (await pipeline("feature-extraction", this.modelId, {
+        dtype: this.dtype as "q8",
+        device: "cpu",
+      })) as unknown as Extractor;
+      this.activeDevice = "cpu";
+    }
 
     const cfg = extractor.model?.config;
     if (cfg?.max_position_embeddings && this.forcedMaxSeq === undefined) {
@@ -172,5 +199,9 @@ export class OnnxEmbeddingProvider implements EmbeddingProvider {
 // ── Registration ──────────────────────────────────────────────────────
 
 registerProvider("onnx:", (model) => {
-  return new OnnxEmbeddingProvider({ model: model.slice("onnx:".length) });
+  // PRAG_EMBEDDING_DEVICE is documented in env-and-storage-paths.md and was
+  // read by nobody: the provider had a `device` option that nothing populated,
+  // so every install silently ran on CPU whatever the user configured.
+  const device = process.env.PRAG_EMBEDDING_DEVICE?.trim() || undefined;
+  return new OnnxEmbeddingProvider({ model: model.slice("onnx:".length), device });
 });

@@ -382,7 +382,9 @@ export async function main(): Promise<void> {
       console.log(`Root: ${h.root ?? "(none)"}`);
       console.log(`Data: ${h.dataDir}`);
       if (h.embeddingModel) {
-        console.log(`Embedding: ${h.embeddingModel} (${h.embeddingDim}d)`);
+        // The device is named so a user can tell acceleration was picked up.
+        const device = h.embeddingDevice ? `, ${h.embeddingDevice}` : "";
+        console.log(`Embedding: ${h.embeddingModel} (${h.embeddingDim}d${device})`);
       }
       if (h.ingestion) {
         const i = h.ingestion;

@@ -333,9 +333,15 @@ async function main(): Promise<void> {
   writeRuntimeFiles(paths, port, cfg.token ?? "guest");
   installShutdown(daemon, cfg);
 
+  // The execution provider is named on startup because it is the difference
+  // between "slow" and "broken acceleration", and nothing else surfaces it
+  // before the first embed (task:local-first-enforcement.md).
+  const device =
+    (startup.provider as { activeDevice?: string | null }).activeDevice ?? "cpu";
   console.log(
     `[prag] daemon listening on 127.0.0.1:${port} ` +
-      `(root: ${paths.root || "xdg"}, model: ${startup.provider.model}, dim: ${startup.provider.dim})`,
+      `(root: ${paths.root || "xdg"}, model: ${startup.provider.model}, ` +
+      `dim: ${startup.provider.dim}, device: ${device})`,
   );
 }
 
