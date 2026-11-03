@@ -11,7 +11,8 @@ import { open, readdir, stat, type FileHandle } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
 import {
   isBuiltinIgnored, isDenied, DEFAULT_MAX_FILE_BYTES,
-  DEFAULT_WATCH_CONFIRM_THRESHOLD, type GrantRow,
+  DEFAULT_WATCH_CONFIRM_THRESHOLD, documentCategory,
+  DEFAULT_MAX_DOCUMENT_BYTES, type GrantRow,
 } from "@prag/core";
 import { WorkerPool } from "./worker-pool.js";
 
@@ -26,6 +27,14 @@ import { type ProcessResult } from "./worker-pool.js";
 const BINARY_DETECTION_BYTES = 8192;
 export const DEFAULT_COOLDOWN_MS = 60_000;
 const GRANTS_CACHE_MS = 1_000;
+
+/**
+ * How far back each reconcile walk looks beyond the previous walk's start.
+ *
+ * Covers same-millisecond writes, writes that land during a walk, and
+ * filesystems whose mtime granularity is a whole second or two.
+ */
+const RECONCILE_GRACE_MS = 2_000;
 
 /**
  * Runtime growth defaults (ADR-023).
@@ -51,6 +60,8 @@ export interface IngestionQueueItem {
 export interface IngestionConfig {
   cooldownMs?: number;
   maxFileBytes?: number;
+  /** Byte cap for the formats in DOCUMENT_FORMATS; default 32MB. */
+  maxDocumentBytes?: number;
   poolSize?: number;
   /**
    * Live view of the grants table, consulted at admission (ADR-009). A function
@@ -161,6 +172,23 @@ export class IngestionQueue {
     since: number; files: number; bytes: number; byDir: Map<string, number>;
   }>();
   /**
+   * `${projectId}\0${path}\0${mtimeMs}` of files already counted towards
+   * growth, with when they were counted.
+   *
+   * Growth means new content arriving, not events. The reconcile walk
+   * overlaps its previous run by `RECONCILE_GRACE_MS` so that a write landing
+   * during a walk is not lost, which means the same unchanged file is
+   * legitimately re-examined on the next flush; counting it again would let
+   * a steady project accumulate phantom growth and hold itself. Path plus
+   * mtime is the cheapest thing at this point in the pipeline that says
+   * "same content" -- the hash is not computed until the worker runs.
+   *
+   * Scoped to the window plus the grace rather than cleared with the window,
+   * because the re-examination arrives in the window *after* the one that
+   * counted it. Bounded by what the breaker itself admits.
+   */
+  private growthCounted = new Map<string, number>();
+  /**
    * Projects doing a walk the user already consented to -- the initial scan
    * behind `prag watch`'s confirmation prompt, or the rescan that `prag
    * resume` triggers. The breaker is not armed for those, or resuming a
@@ -227,6 +255,7 @@ export class IngestionQueue {
     this.config = {
       cooldownMs: config.cooldownMs ?? DEFAULT_COOLDOWN_MS,
       maxFileBytes: config.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES,
+      maxDocumentBytes: config.maxDocumentBytes ?? DEFAULT_MAX_DOCUMENT_BYTES,
       poolSize: config.poolSize ?? 1,
       grants: config.grants,
       isPaused: config.isPaused,
@@ -349,6 +378,7 @@ export class IngestionQueue {
     this.growth.delete(projectId);
     this.growthSuppressed.delete(projectId);
     this.growthBreaches.delete(projectId);
+    this._forgetGrowthCounted(projectId);
     this.readyPromises.delete(projectId);
     this.projectDirs.delete(projectId);
     this.projectCooldownMs.delete(projectId);
@@ -483,7 +513,12 @@ export class IngestionQueue {
    * this guards against does not stop at the bucket boundary and trips the
    * next one.
    */
-  private _recordGrowth(projectId: string, filePath: string, size: number): void {
+  private _recordGrowth(
+    projectId: string,
+    filePath: string,
+    size: number,
+    mtimeMs: number,
+  ): void {
     if (this.growthSuppressed.has(projectId)) return;
 
     const limits = this.config.growth ?? {};
@@ -493,6 +528,16 @@ export class IngestionQueue {
     if (maxFiles <= 0 && maxBytes <= 0) return;
 
     const now = Date.now();
+
+    // Count content, not events: an unchanged file re-examined by the
+    // overlapping reconcile walk is not growth.
+    const retainMs = windowMs + RECONCILE_GRACE_MS;
+    for (const [k, at] of this.growthCounted) {
+      if (now - at > retainMs) this.growthCounted.delete(k);
+    }
+    const key = `${projectId}\0${filePath}\0${mtimeMs}`;
+    if (this.growthCounted.has(key)) return;
+    this.growthCounted.set(key, now);
     let w = this.growth.get(projectId);
     if (!w || now - w.since >= windowMs) {
       w = { since: now, files: 0, bytes: 0, byDir: new Map() };
@@ -538,6 +583,14 @@ export class IngestionQueue {
     this.growthBreaches.set(projectId, breach);
     this.growth.delete(projectId);
     this.config.onGrowthBreach?.(breach);
+  }
+
+  /** Drop a project's counted-file memory (unregister, or a consented rewalk). */
+  private _forgetGrowthCounted(projectId: string): void {
+    const prefix = `${projectId}\0`;
+    for (const k of this.growthCounted.keys()) {
+      if (k.startsWith(prefix)) this.growthCounted.delete(k);
+    }
   }
 
   private _shouldIgnore(filePath: string, projectId?: string): boolean {
@@ -588,8 +641,15 @@ export class IngestionQueue {
       fd = await open(filePath, "r");
       const info = await fd.stat();
 
-      // maxFileBytes check
-      if (info.size > this.config.maxFileBytes) {
+      // A document is binary by construction and larger than source, so it is
+      // judged against its own cap and skips the NUL test. Same reasoning and
+      // same predicate as `probeFile`, so the dry run's promise and what the
+      // watcher admits cannot diverge (ADR-023).
+      const isDocument = documentCategory(filePath) !== null;
+      const sizeCap = isDocument
+        ? (this.config.maxDocumentBytes ?? DEFAULT_MAX_DOCUMENT_BYTES)
+        : this.config.maxFileBytes;
+      if (info.size > sizeCap) {
         this._incrementSkip(projectId, "tooLarge");
         return false;
       }
@@ -599,15 +659,17 @@ export class IngestionQueue {
         return false;
       }
 
-      // Binary detection: read first 8KB for NUL bytes
-      const buf = Buffer.alloc(BINARY_DETECTION_BYTES);
-      const { bytesRead } = await fd.read(buf, 0, BINARY_DETECTION_BYTES, 0);
-      if (buf.subarray(0, bytesRead).includes(0)) {
-        this._incrementSkip(projectId, "binary");
-        return false;
+      if (!isDocument) {
+        // Binary detection: read first 8KB for NUL bytes
+        const buf = Buffer.alloc(BINARY_DETECTION_BYTES);
+        const { bytesRead } = await fd.read(buf, 0, BINARY_DETECTION_BYTES, 0);
+        if (buf.subarray(0, bytesRead).includes(0)) {
+          this._incrementSkip(projectId, "binary");
+          return false;
+        }
       }
 
-      this._recordGrowth(projectId, filePath, info.size);
+      this._recordGrowth(projectId, filePath, info.size, info.mtimeMs);
       return true;
     } catch {
       this._incrementSkip(projectId, "unreadable");
@@ -689,6 +751,7 @@ export class IngestionQueue {
       this.growthSuppressed.add(id);
       this.growth.delete(id);
       this.growthBreaches.delete(id);
+      this._forgetGrowthCounted(id);
       this.reconciledAt.set(id, 0);
     };
     if (projectId) {
@@ -942,9 +1005,20 @@ export class IngestionQueue {
       const dir = this.projectDirs.get(id);
       if (!dir) continue;
 
-      const since = this.reconciledAt.get(id) ?? 0;
-      const now = Date.now();
-      this.reconciledAt.set(id, now);
+      // Overlapping, not abutting. The stamp is taken *before* the walk, so
+      // a file written while the walk is in progress has an mtime below the
+      // next `since` and, with a strict `>` against an exact boundary, would
+      // be invisible to this reconcile and to every one after it -- a
+      // permanent miss that only a `rescan` or a later edit would undo. The
+      // same hole swallows a write landing in the same millisecond as the
+      // stamp, and a whole second of writes on a filesystem whose mtime
+      // granularity is coarse (many network mounts, and ext3).
+      //
+      // Re-examination is idempotent: `_ingestFile` short-circuits on the
+      // content hash, so an overlap costs a stat and a read, never an embed.
+      // That makes a grace window the cheap side of the trade.
+      const since = Math.max(0, (this.reconciledAt.get(id) ?? 0) - RECONCILE_GRACE_MS);
+      this.reconciledAt.set(id, Date.now());
 
       const stack = [dir];
       while (stack.length > 0) {

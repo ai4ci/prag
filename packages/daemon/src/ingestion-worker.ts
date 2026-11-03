@@ -10,12 +10,16 @@ import { createHash } from "node:crypto";
 import {
   chunkDocumentOrCode,
   detectLanguageFromPath,
+  documentCategory,
   UNSUPPORTED_DOCUMENT_EXTENSIONS,
 } from "@prag/core";
+import { extractDocument } from "./document-extractor.js";
 
 export interface WorkerInput {
   projectId: string;
   filePath: string;
+  /** Pages of a paginated document to parse (ADR-003); the extractor's default when unset. */
+  maxDocumentPages?: number;
 }
 
 export interface WorkerOutput {
@@ -52,21 +56,46 @@ if (port) {
           language: "unknown",
           contentHash: "",
           chunks: [],
-          error: `UNSUPPORTED_FORMAT: no parser for ${rejected} (LiteParse is out of scope)`,
+          error: `UNSUPPORTED_FORMAT: no parser for ${rejected}`,
         };
         port.postMessage(output);
         return;
       }
 
-      const lang = detectLanguageFromPath(input.filePath);
-      const content = await readFile(input.filePath, "utf-8");
-      const chunked = chunkDocumentOrCode(input.filePath, content);
+      // A binary document is extracted to Markdown first (ADR-003). Its
+      // content hash is over the *file bytes*, not the extracted text: ADR-017
+      // addresses the file, and hashing the output would make an index rebuild
+      // after a parser upgrade look like every document had changed.
+      //
+      // The extracted Markdown is chunked under a `.md` pseudo-path so the
+      // heading chunker is selected -- the real path ends in `.pdf`, and
+      // routing on it would send Markdown to the tree-sitter chunker.
+      const category = documentCategory(input.filePath);
+      let lang: string;
+      let content: string;
+      let contentHash: string;
+      if (category) {
+        const extracted = await extractDocument(input.filePath,
+          { maxPages: input.maxDocumentPages });
+        const bytes = await readFile(input.filePath);
+        contentHash = createHash("sha256").update(bytes).digest("hex");
+        content = extracted!.markdown;
+        lang = extracted!.category;
+      } else {
+        lang = detectLanguageFromPath(input.filePath);
+        content = await readFile(input.filePath, "utf-8");
+        contentHash = createHash("sha256").update(content).digest("hex");
+      }
+      const chunked = chunkDocumentOrCode(
+        category ? `${input.filePath}.md` : input.filePath,
+        content,
+      );
 
       const output: WorkerOutput = {
         projectId: input.projectId,
         filePath: input.filePath,
         language: lang,
-        contentHash: createHash("sha256").update(content).digest("hex"),
+        contentHash,
         chunks: chunked.chunks.map((c) => ({
           chunkHash: c.chunkHash,
           text: c.text,

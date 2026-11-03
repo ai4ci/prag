@@ -41,16 +41,10 @@ export interface ChunkedFile {
  * (task:daemon-parser-router.md; LiteParse is `task:liteparse-document-pipeline.md`).
  */
 export const UNSUPPORTED_DOCUMENT_EXTENSIONS: ReadonlySet<string> = new Set([
-  ".pdf",
-  ".docx",
-  ".doc",
-  ".pptx",
-  ".ppt",
-  ".xlsx",
-  ".xls",
-  ".odt",
-  ".rtf",
-  ".epub",
+  // The document formats are NOT here: they go to the extractor in
+  // `daemon/src/document-extractor.ts` and are listed in `DOCUMENT_FORMATS`.
+  // What remains is archives, images and compiled artefacts -- things with
+  // no text to extract, rather than things prag has not got round to.
   ".zip",
   ".tar",
   ".gz",

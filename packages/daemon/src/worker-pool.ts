@@ -44,6 +44,8 @@ export interface WorkerPoolOptions {
   jobTimeoutMs?: number;
   /** Worker script override (tests use a fixture worker). */
   workerScript?: string;
+  /** Pages of a paginated document a worker will parse (ADR-003); default 500. */
+  maxDocumentPages?: number;
 }
 
 type Pending = {
@@ -77,6 +79,7 @@ export class WorkerPool {
   private queue: Job[] = [];
   private script: string;
   private jobTimeoutMs: number;
+  private maxDocumentPages: number | undefined;
   private closed = false;
   private nextId = 0;
 
@@ -89,6 +92,7 @@ export class WorkerPool {
       opts.workerScript ??
       resolve(dirname(fileURLToPath(import.meta.url)), "ingestion-worker.ts");
     this.jobTimeoutMs = opts.jobTimeoutMs ?? DEFAULT_JOB_TIMEOUT_MS;
+    this.maxDocumentPages = opts.maxDocumentPages;
 
     for (let i = 0; i < size; i++) {
       this._addSlot();
@@ -97,7 +101,12 @@ export class WorkerPool {
 
   /** Submit a file for processing. Resolves when a worker answers. */
   processFile(projectId: string, filePath: string): Promise<ProcessResult> {
-    const input: WorkerInput = { projectId, filePath };
+    // Carried per job rather than set on the worker at spawn: it is read
+    // only when the file turns out to be a document, and a per-job field
+    // needs no new plumbing through `_spawn`.
+    const input: WorkerInput = {
+      projectId, filePath, maxDocumentPages: this.maxDocumentPages,
+    };
     return new Promise((resolve, reject) => {
       if (this.closed) {
         reject(new WorkerPoolError("worker pool is closed"));

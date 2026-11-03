@@ -8,6 +8,7 @@ import { open, readdir, stat, type FileHandle } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { evaluateUriGrants, type GrantRow } from "./schema.js";
+import { documentCategory, DEFAULT_MAX_DOCUMENT_BYTES } from "./document-formats.js";
 
 /** ADR-023 defaults. */
 export const DEFAULT_MAX_FILE_BYTES = 2 * 1024 * 1024;
@@ -76,6 +77,8 @@ export type SkipReason = "tooLarge" | "binary" | "empty" | "denied" | "unreadabl
 
 export interface DiscoveryLimits {
   maxFileBytes?: number;
+  /** Byte cap for DOCUMENT_FORMATS; default 32MB. Separate from maxFileBytes. */
+  maxDocumentBytes?: number;
   ignored?: (path: string) => boolean;
   /** Override the confirmation threshold (defaults to DEFAULT_WATCH_CONFIRM_THRESHOLD). */
   threshold?: { projects: number; files: number };
@@ -142,6 +145,7 @@ export async function discoveryDryRun(
   limits: DiscoveryLimits = {},
 ): Promise<DryRunResult> {
   const maxFileBytes = limits.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES;
+  const maxDocumentBytes = limits.maxDocumentBytes ?? DEFAULT_MAX_DOCUMENT_BYTES;
   // Root-relative: a project under `~/.config` or inside a directory called
   // `build` is a project, not a thing to skip. Only the layout below the root
   // is the project's own.
@@ -204,7 +208,7 @@ export async function discoveryDryRun(
       }
       if (!entry.isFile()) continue;
 
-      const verdict = await probeFile(full, maxFileBytes);
+      const verdict = await probeFile(full, maxFileBytes, maxDocumentBytes);
       if (verdict === "denied") skip("denied");
       else if (verdict !== null) skip(verdict);
       else {
@@ -233,12 +237,21 @@ export async function discoveryDryRun(
 export async function probeFile(
   filePath: string,
   maxFileBytes: number,
+  maxDocumentBytes: number = DEFAULT_MAX_DOCUMENT_BYTES,
 ): Promise<SkipReason | null> {
+  // A document is binary by construction -- a PDF has NUL bytes in its first
+  // 8KB -- so the NUL test would reject every one of them before a parser saw
+  // it. "Binary" here means "not text and nothing can read it", and that is
+  // no longer true of the formats in DOCUMENT_FORMATS. They also get their
+  // own byte cap: `maxFileBytes` is 2MB, sized for source files, which would
+  // refuse most real PDFs.
+  const isDocument = documentCategory(filePath) !== null;
   let fd: FileHandle | undefined;
   try {
     const info = await stat(filePath);
-    if (info.size > maxFileBytes) return "tooLarge";
+    if (info.size > (isDocument ? maxDocumentBytes : maxFileBytes)) return "tooLarge";
     if (info.size === 0) return "empty";
+    if (isDocument) return null;
 
     fd = await open(filePath, "r");
     const buf = Buffer.alloc(BINARY_DETECTION_BYTES);

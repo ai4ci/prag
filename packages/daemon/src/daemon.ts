@@ -157,6 +157,10 @@ export interface DaemonConfig {
   ingestion?: {
     cooldownMs?: number;
     maxFileBytes?: number;
+    /** Byte cap for binary documents; default 32MB (ADR-003). */
+    maxDocumentBytes?: number;
+    /** Pages of a paginated document that are parsed; default 500. */
+    maxDocumentPages?: number;
     poolSize?: number;
     /** ADR-019 bound on POST /sync; default DEFAULT_SYNC_TIMEOUT_MS. */
     syncTimeoutMs?: number;
@@ -279,7 +283,8 @@ export class Daemon {
     // Start ingestion pipeline if configured
     const ingConfig = this.config.ingestion;
     if (ingConfig?.poolSize !== undefined && ingConfig.poolSize > 0) {
-      this.workerPool = new WorkerPool(ingConfig.poolSize);
+      this.workerPool = new WorkerPool(ingConfig.poolSize,
+        { maxDocumentPages: ingConfig.maxDocumentPages });
       this.ingestionQueue = new IngestionQueue(
         this.workerPool,
         // Returning the promise is what lets flushAll() be a drain barrier:
@@ -288,6 +293,7 @@ export class Daemon {
         {
           cooldownMs: ingConfig.cooldownMs,
           maxFileBytes: ingConfig.maxFileBytes,
+          maxDocumentBytes: ingConfig.maxDocumentBytes,
           // ADR-009 §1: policy is consulted at admission, on every event, so a
           // `prag deny` stops a file from being read without a restart.
           grants: () => this._grantRows(),

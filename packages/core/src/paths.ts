@@ -102,6 +102,14 @@ export interface PragConfig {
   ingestion?: {
     workerPoolSize?: number;
     maxFileBytes?: number;
+    /**
+     * Byte cap for binary documents (PDF, DOCX, ...); default 33554432 (32MB).
+     * Separate from `maxFileBytes`, which is sized for source files at 2MB and
+     * would refuse most real PDFs.
+     */
+    maxDocumentBytes?: number;
+    /** Pages of a paginated document that are parsed; default 500. */
+    maxDocumentPages?: number;
     watchConfirmThreshold?: { projects: number; files: number };
     /**
      * ADR-023 runtime growth bound. `watchConfirmThreshold` asks "is this too

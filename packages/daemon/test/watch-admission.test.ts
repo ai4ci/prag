@@ -28,8 +28,19 @@ async function json(port: number, path: string, body?: unknown, method = "POST")
   return { status: res.status, body: parsed as Record<string, any> };
 }
 
-async function urisFor(port: number, query: string): Promise<string[]> {
-  const res = await json(port, "/search", { query, limit: 20 });
+/**
+ * URIs a search returns, scoped to one project.
+ *
+ * Scoped deliberately. Every test in this suite shares one daemon and one
+ * index, so an unscoped `limit: 20` ranks this project's files against
+ * everything the earlier tests indexed -- and the file under test can fall
+ * out of the top 20 depending on what ran before it. That made this suite
+ * fail about one run in three under full-suite load and pass in isolation.
+ * It also makes the negative assertions mean something: "the secret is not in
+ * these results" is worth little when the results are another project's.
+ */
+async function urisFor(port: number, query: string, projectId?: string): Promise<string[]> {
+  const res = await json(port, "/search", { query, limit: 20, ...(projectId ? { projectId } : {}) });
   return ((res.body?.hits ?? []) as Array<{ uri: string }>).map((h) => h.uri);
 }
 
@@ -111,7 +122,7 @@ function watchAdmissionSuite(): void {
     const sync = await json(ctx.port, "/sync", { projectId: "big-project" });
     assert.equal(sync.status, 200, JSON.stringify(sync.body));
 
-    const uris = await urisFor(ctx.port, "anything");
+    const uris = await urisFor(ctx.port, "anything", "big-project");
     for (const name of ["a.ts", "b.ts"]) {
       assert.ok(
         uris.some((u) => u.endsWith(name)),
@@ -131,7 +142,7 @@ function watchAdmissionSuite(): void {
     assert.equal(deny.status, 200, JSON.stringify(deny.body));
     assert.equal(deny.body.purgedFiles, 1, JSON.stringify(deny.body));
 
-    const uris = await urisFor(ctx.port, "anything");
+    const uris = await urisFor(ctx.port, "anything", "big-project");
     assert.ok(
       !uris.some((u) => u.endsWith("b.ts")),
       `denied file still searchable: ${uris.join(", ")}`,
@@ -142,7 +153,7 @@ function watchAdmissionSuite(): void {
     writeFileSync(join(ctx.tmpDir, "big", "b.ts"), "export const b = 999;\n");
     const sync = await json(ctx.port, "/sync", { projectId: "big-project" });
     assert.equal(sync.status, 200);
-    const after = await urisFor(ctx.port, "anything");
+    const after = await urisFor(ctx.port, "anything", "big-project");
     assert.ok(!after.some((u) => u.endsWith("b.ts")), "denied path was re-indexed after sync");
 
     const projects = (await json(ctx.port, "/projects", undefined, "GET")).body as Array<{
@@ -176,9 +187,10 @@ function watchAdmissionSuite(): void {
     assert.equal(watch.body.discovered.files, 1, JSON.stringify(watch.body.discovered));
 
     await json(ctx.port, "/sync", { projectId: "with-secret" });
-    const uris = await urisFor(ctx.port, "anything");
+    const uris = await urisFor(ctx.port, "anything", "with-secret");
+    assert.ok(uris.some((u) => u.endsWith("index.ts")),
+      `the project's own file was not indexed: ${uris.join(", ")}`);
     assert.ok(!uris.some((u) => u.includes("token.txt")), `secret was indexed: ${uris.join(", ")}`);
-    assert.ok(uris.some((u) => u.endsWith("index.ts")));
   });
 
   void it("pause stops ingestion and resume continues it", async () => {
@@ -203,14 +215,14 @@ function watchAdmissionSuite(): void {
     assert.equal(paused.status, 200, JSON.stringify(paused.body));
     // ADR-023: while paused, events are dropped rather than queued.
     assert.equal(paused.body.flushedFiles, 0, JSON.stringify(paused.body));
-    let uris = await urisFor(ctx.port, "anything");
+    let uris = await urisFor(ctx.port, "anything", "pausable");
     assert.ok(!uris.some((u) => u.endsWith("second.ts")), "indexed while paused");
 
     const resume = await json(ctx.port, "/resume", { projectId: "pausable" });
     assert.equal(resume.status, 200);
     const resumed = await json(ctx.port, "/sync", { projectId: "pausable" });
     assert.equal(resumed.status, 200, JSON.stringify(resumed.body));
-    uris = await urisFor(ctx.port, "anything");
+    uris = await urisFor(ctx.port, "anything", "pausable");
     assert.ok(
       uris.some((u) => u.endsWith("second.ts")),
       `second.ts missing after resume: ${uris.join(", ")}`,

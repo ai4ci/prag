@@ -49,6 +49,7 @@ export {
   discoveryDryRun,
   isDenied,
   isBuiltinIgnored,
+  probeFile,
   grantPatternToPath,
   pathToGrantPattern,
   DEFAULT_MAX_FILE_BYTES,
@@ -149,3 +150,13 @@ export {
   type FreshnessHint,
 } from "./web-backend.js";
 export { PLAIN_FETCHER_ID, htmlToText } from "./plain-fetcher.js";
+
+// ADR-003: which binary formats have a document parser. The policy is here so
+// discovery, admission and the worker cannot disagree; the parsers are in
+// @prag/daemon.
+export {
+  DOCUMENT_FORMATS,
+  documentCategory,
+  DEFAULT_MAX_DOCUMENT_BYTES,
+  DEFAULT_MAX_DOCUMENT_PAGES,
+} from "./document-formats.js";

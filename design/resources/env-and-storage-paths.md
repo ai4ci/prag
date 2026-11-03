@@ -122,6 +122,8 @@ If present at `~/.config/prag/config.json`, the daemon loads defaults from this 
   "ingestion": {
     "workerPoolSize": 1,
     "maxFileBytes": 2097152,
+    "maxDocumentBytes": 33554432,
+    "maxDocumentPages": 500,
     "watchConfirmThreshold": { "projects": 25, "files": 20000 },
     "growth": { "windowMs": 60000, "maxFiles": 20000, "maxBytes": 1073741824 }
   },
@@ -154,6 +156,19 @@ If present at `~/.config/prag/config.json`, the daemon loads defaults from this 
 another backend, since relocating egress silently is the failure ADR-024 exists to
 prevent. Credentials for a hosted backend are supplied here or by the env vars
 below; a hosted fetch backend never permits a hosted inference endpoint (ADR-006).
+
+`ingestion.maxDocumentBytes` and `maxDocumentPages` bound binary documents
+(PDF, DOCX, PPTX, XLSX, ODT, RTF, EPUB, notebooks — ADR-003). They are
+separate from `maxFileBytes` because that is 2MB, sized for source files, and
+would refuse most real PDFs. Documents also skip the NUL-byte binary probe,
+which would otherwise reject every one of them. `maxDocumentPages` exists
+because page count and byte size are only loosely related: a long scanned
+report fits inside the byte cap and still costs minutes to parse.
+
+OCR is off in both engines and is not configurable. It is slow,
+non-deterministic enough to churn chunk hashes between runs, and local-first
+forbids reaching for a model that is not already on the machine. A scanned PDF
+therefore yields little text rather than silently taking minutes.
 
 `ingestion.growth` is the runtime half of `watchConfirmThreshold`. The
 threshold asks "is this too much to take on?" once, when you run `prag watch`;

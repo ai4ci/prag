@@ -2,10 +2,17 @@
 class: task
 id: liteparse-document-pipeline.md
 title: Implement LiteParse layout-preserving PDF/DOCX to Markdown pipeline
-status: blocked
+status: done
 priority: medium
 relates-to:
   - feature:layout-preserving-chunking.md
+addressed-by:
+  - src:core/src/document-formats.ts#DOCUMENT_FORMATS
+  - src:core/src/document-formats.ts#documentCategory
+  - src:daemon/src/document-extractor.ts#extractDocument
+tested-by:
+  - daemontest:document-pipeline.test.ts#documentPipelineSuite
+  - daemontest:document-pipeline.test.ts#documentIngestionSuite
 ---
 ## Objective
 Implement the dedicated layout-preserving document ingestion pipeline for binary documents (PDF, DOCX) using `@llamaindex/liteparse`, per `layout-preserving-chunking.md`.
@@ -98,3 +105,47 @@ reported as `name: "function"` rather than `greet`, for both functions in the
 fixture. R assigns functions to variables and xberg's extractor does not
 resolve the assignment. R is the language ADR-003 was written around, so this
 is not a corner case here. The code path stays with the existing chunker.
+
+
+## Done 2026-11-03: both engines, routed by format
+
+The maintainer chose "both, routed by format". ADR-003 is amended with the
+measurements and the reasoning; this records what was built.
+
+- **Offline layout-aware parsing — DONE.** PDF through LiteParse, every other
+  format in `DOCUMENT_FORMATS` through xberg. No network: OCR is pinned off
+  in both, so neither reaches for a model that is not already present.
+- **Structure preserved — DONE.** Asserted on the fixtures rather than
+  described: headings, `-` bullets and a real Markdown table come back from
+  both `sample.pdf` and `sample.docx`, and the distinctive sentence from the
+  source `sample.md` survives both paths.
+- **Markdown before chunking — DONE.** Extraction yields Markdown, chunked by
+  the existing heading chunker via a `.md` pseudo-path -- the real path ends
+  `.pdf`, and routing on it would hand Markdown to the tree-sitter chunker.
+- **`language` is the document category — DONE.** `pdf`, `docx`, never the
+  engine that produced it.
+- **Maximum size and page count — DECIDED.** `maxDocumentBytes` 32MB and
+  `maxDocumentPages` 500, both configurable. This was the task's open
+  question.
+
+### Two gates had to move, and neither was obvious
+
+`maxFileBytes` is 2MB and is sized for source files; applied to documents it
+refuses most real PDFs, so documents are judged against their own cap. And
+**a document is binary by construction** -- a PDF has NUL bytes in its first
+8KB -- so the binary probe rejected every one before a parser could see it.
+Both gates exist in two places, the discovery dry run and the ingestion
+queue's admission, and both had to change together or `prag watch`'s promise
+and what the watcher admits would diverge (ADR-023). That is why
+`DOCUMENT_FORMATS` is in core: it is a policy three components share, not a
+parser.
+
+### Not done
+
+- **Scanned documents yield little text.** OCR is off for the reasons in
+  ADR-003. A `forceOcr` opt-in is a reasonable future addition; it needs a
+  decision about model provenance first, since local-first forbids a silent
+  download.
+- **The 60s worker job timeout is unchanged.** 500 text-layer pages parse in
+  about 2.5s, so it is not close -- but a pathological document would fail
+  the file rather than hang the pool, which is the right failure.
