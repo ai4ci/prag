@@ -104,7 +104,6 @@ _(no results)_
 
 <!-- loom view: task_list -->
 
-- [Maintain the test fixture corpus and git fixture builder](tasks/test-fixture-corpus.md)
 - [Build Tree-sitter and LiteParse parser routing in @prag/daemon](tasks/daemon-parser-router.md)
 - [Implement LiteParse layout-preserving PDF/DOCX to Markdown pipeline](tasks/liteparse-document-pipeline.md)
 - [Implement hardware acceleration provider selection and local-first enforcement](tasks/local-first-enforcement.md)

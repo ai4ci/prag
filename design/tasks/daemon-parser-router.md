@@ -2,7 +2,7 @@
 class: task
 id: daemon-parser-router.md
 title: Build Tree-sitter and LiteParse parser routing in @prag/daemon
-status: in_progress
+status: blocked
 priority: medium
 relates-to:
   - feature:syntax-aware-chunking.md
@@ -26,3 +26,21 @@ Implement the parser router in @prag/daemon dispatching code files to Tree-sitte
 - Implement whitespace normalization for chunkHash calculation over the **whole** chunk regardless of size, while preserving comments and docstrings intact.
 - Verify that reformatting code whitespace produces identical chunkHash values, bypassing ONNX re-embedding.
 - Route PDF and DOCX files to @llamaindex/liteparse for layout-preserving Markdown extraction.
+
+## Implementation status 2026-11-03
+
+Every requirement is met except document routing, which is blocked on a
+dependency that cannot be added from here.
+
+- **Tree-sitter for TypeScript, JavaScript, Python and R — DONE.**
+- **Structural chunk boundaries, never splitting a unit — DONE.**
+- **ADR-014 vectorised units with overlap, one `chunk_mapping` row per chunk
+  and one `vector_pool` row per unit keyed `(chunkHash, unitIndex)` — DONE.**
+- **Scope annotation prefixed at embedding time only, not stored — DONE.**
+- **ADR-010 whitespace normalisation over the whole chunk, comments preserved,
+  verified by the `reformat` fixture pair — DONE.**
+- **PDF/DOCX routing to LiteParse — BLOCKED.** See
+  `task:liteparse-document-pipeline.md`: the package is not installed and the
+  lockfile is read-only in the development sandbox. Unsupported documents are
+  refused by extension today, which is the correct interim behaviour --
+  nothing is silently indexed as garbage.

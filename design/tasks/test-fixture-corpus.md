@@ -2,7 +2,7 @@
 class: task
 id: test-fixture-corpus.md
 title: Maintain the test fixture corpus and git fixture builder
-status: in_progress
+status: done
 priority: high
 relates-to:
   - feature:test-harness-and-fixtures.md
@@ -65,3 +65,28 @@ Still open, and not fixable here (so the status stays `in_progress`):
 `check-invariants.ts` cannot carry a loom link: `test/fixtures/` is outside the `src` path
 annotation (`design/document-model.mmd` maps `src` to `/packages`), so the links above point at
 the harness that builds the fixtures and the suite that checks them.
+
+## Implementation status 2026-11-03
+
+Complete. Every concrete requirement is met and enforced.
+
+- **Builder — DONE.** `test/fixtures/build-git-fixtures.mjs` is dependency-free,
+  idempotent, pins author/committer identity and dates, and is invoked by the
+  harness into a directory under the test `PRAG_ROOT` (ADR-019). Git fixtures
+  are built, never committed.
+- **Invariant check — DONE, and runs in CI** via
+  `coretest:fixtures.test.ts`. All four required invariants are asserted, plus
+  a fifth: the dedup pair is byte-identical, the reformat pair differs only in
+  whitespace, `large.ts` still exceeds the vectorised-unit budget measured
+  with the real tokenizer rather than a chars/4 guess, two consecutive builds
+  produce identical SHAs, and the `alpha-feature-x` files exist and are unique
+  to that branch.
+- **Documentation — DONE.** Every fixture on disk appears in
+  `test/fixtures/README.md` with what it proves and the invariant to preserve,
+  verified file by file.
+
+The remaining clause -- "extend the corpus when a new ingestion path is added"
+-- is standing maintenance rather than a deliverable, so it is not a reason to
+hold the task open. The next path that will need a fixture is PDF/DOCX; the
+documents already exist (`documents/sample.{md,pdf,docx}`) and are waiting on
+`task:liteparse-document-pipeline.md`.
