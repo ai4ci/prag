@@ -10,7 +10,13 @@
     "test": "tsx --test 'test/*.test.ts'"
   },
   "dependencies": {
-    "@prag/core": "*"
+    "@llamaindex/liteparse": "^2.17.0",
+    "@prag/core": "*",
+    "@xberg-io/crawlberg": "^1.12.4",
+    "@xberg-io/crawlberg-wasm": "^1.12.4",
+    "@xberg-io/tree-sitter-language-pack-wasm": "^1.23.1",
+    "@xberg-io/xberg": "^1.3.10",
+    "@xberg-io/xberg-wasm": "^1.3.10"
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",

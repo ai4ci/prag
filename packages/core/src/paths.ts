@@ -112,10 +112,17 @@ export interface PragConfig {
    * install local-only. A backend is never selected implicitly.
    */
   web?: {
-    /** Backend id, e.g. "plain-fetcher". Unknown ids fail at startup. */
+    /** Backend id, e.g. "crawlberg". Unknown ids fail at startup. */
     backend?: string;
     firecrawl?: { url?: string; apiKey?: string };
     exa?: { apiKey?: string };
+    /** Options for the built-in crawlberg backend (see WebBackendConfig). */
+    crawlberg?: {
+      allowPrivateNetwork?: boolean;
+      ignoreRobotsTxt?: boolean;
+      rateLimitMs?: number;
+      userAgent?: string;
+    };
   };
   storage?: {
     dataDir?: string | null;

@@ -122,3 +122,87 @@ run. A single binary solves installation, not deployment.
 Scope note: this decision records *what* to ship. Writing the install
 documentation, the npm publish workflow and the Dockerfile is the remaining
 work, and this issue stays open for it.
+
+## Addendum 2026-11-03: the WASM route, measured
+
+The "no single binary" conclusion above was reasoned from issue reports. The
+`@xberg-io` WASM packages make a different route testable, so it was tested.
+
+**A standalone Bun binary with no `node_modules` does work, for the parts that
+have WASM builds.** `bun build --compile` produced a 95MB binary that loaded
+`@xberg-io/tree-sitter-language-pack-wasm` (32 grammars, reporting
+`languageCount() === 32`), parsed TypeScript and returned the correct
+structure, and ran `@xberg-io/crawlberg-wasm` end to end -- a real HTTP fetch
+against a loopback origin and HTML converted to Markdown -- from a directory
+containing nothing but the binary. None of the three failure modes above
+applies, because none of it is a `.node` addon: the grammars are compiled into
+a single 57MB `.wasm` with, in the package's own words, "no runtime download
+and no local cache".
+
+That is the good news. Two things still block a daemon binary, and one of them
+is not a packaging problem.
+
+### Blocker 1: the embedding model has no WASM path as installed
+
+`onnxruntime-web` is present in the tree (a transitive dependency of
+`@huggingface/transformers` 4.3.2), but it is unreachable. The package's
+`exports` map sends every Node resolution to `dist/transformers.node.mjs`, and
+that build rejects the device outright:
+
+```
+error: Unsupported device: "wasm". Should be one of: cuda, webgpu, cpu.
+```
+
+`transformers.web.js`, which is the build that supports the WASM execution
+provider, is not shipped in `dist/` at all. So `onnxruntime-node` stays, and it
+is precisely the `onnxruntime_binding.node` + sibling `libonnxruntime.so.1`
+shape that [#44063](https://github.com/oven-sh/bun/issues/44063) describes.
+
+### Blocker 2: R is not in the WASM grammar bundle
+
+The package documents a "curated grammar subset", and the 32 it ships are
+`bash c cpp csharp css dockerfile elixir erlang go haskell html java javascript
+json kotlin lua markdown php python ruby rust scala shell sql svelte swift toml
+tsx typescript vue yaml zig`. **`r` is absent**, and `hasLanguage("r")` returns
+false. ADR-003 names R as a motivating language and `daemon-parser-router`
+commits to it. A hybrid -- WASM for the other 31, native for R -- puts the
+native addon straight back and collects none of the benefit.
+
+The reason given is structural rather than an oversight: "a full 372-grammar
+wasm build is impractical: the parser sources total ~1.7 GB and the largest
+grammars exhaust the wasm32 clang backend." So this is unlikely to resolve by
+waiting.
+
+### LanceDB, which was the question asked
+
+LanceDB has no WASM build, so a binary needs a replacement regardless. It is
+worth noting what replacing it actually costs: `@lancedb/lancedb` is **1.1GB
+installed** (a 215MB `.node`, plus vendored copies of `sharp`, `libvips` and a
+second `onnxruntime-node`), which makes it the single largest item in the tree
+by a wide margin. Candidates that keep the no-native-addon property are PGlite
+(WASM Postgres, with `pgvector` for the dense half and `tsvector` for BM25) and
+`bun:sqlite`, which is compiled into the Bun binary itself, with a brute-force
+vector scan. Both are real options; neither has been measured, and the ADR-005
+single-writer invariant and ADR-014 vector-unit schema would both need
+restating against whichever is chosen.
+
+### Conclusion, revised
+
+**"No single binary" stands, but the reason has moved.** It is no longer
+"Bun cannot embed our addons" -- for the WASM stack it demonstrably can. It is
+that two of the three native dependencies have no usable WASM path today: the
+embedder because the shipped build will not accept the device, and the R
+grammar because it is not in the bundle and the maintainers say it cannot
+easily be. LanceDB is the *tractable* one of the three, which inverts the
+earlier assessment.
+
+Worth revisiting if either blocker moves -- a transformers.js build that
+exposes the WASM provider under Node, or an R grammar in the pack -- because
+the rest of the route is now known to work rather than assumed not to.
+
+**Independently of the binary question**, the 95MB measurement says something
+about install size: `@xberg-io/tree-sitter-language-pack-wasm` at 55MB removes
+the 48MB `~/.cache/tree-sitter-language-pack` runtime download that
+`@kreuzberg/tree-sitter-language-pack` performs on first parse. For the
+container image in option 2 above, trading a first-run download for bundled
+bytes is the right trade even while R keeps the native pack in the tree.

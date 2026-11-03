@@ -27,6 +27,11 @@ import {
 import { join } from "node:path";
 import { writeFileSync, chmodSync, mkdirSync } from "node:fs";
 import { Daemon, type DaemonConfig } from "./daemon.js";
+// Imported for its side effect: registering the crawlberg backend, so that
+// `web.backend: "crawlberg"` resolves. The import lives in the daemon entry
+// point and nowhere else, which is what keeps the native addon off the CLI's
+// graph (ADR-020).
+import "./crawlberg-backend.js";
 
 // ── Database location ────────────────────────────────────────────────
 
@@ -75,7 +80,7 @@ export function loadConfig(): DaemonConfig {
   // rather than a silent fallback to a different egress path.
   const webBackend = resolveWebBackend(
     process.env.PRAG_WEB_BACKEND?.trim() || config.web?.backend,
-    { firecrawl: config.web?.firecrawl, exa: config.web?.exa },
+    { firecrawl: config.web?.firecrawl, exa: config.web?.exa, crawlberg: config.web?.crawlberg },
   );
 
   return {

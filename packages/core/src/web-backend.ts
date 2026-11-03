@@ -72,6 +72,18 @@ export interface WebFetchBackend {
 export interface WebBackendConfig {
   firecrawl?: { url?: string; apiKey?: string };
   exa?: { apiKey?: string };
+  /**
+   * Options for the crawlberg backend, which lives in `@prag/daemon` because
+   * it resolves to a native addon. The shape is restated here rather than
+   * imported so that core, and therefore the CLI, never reaches into the
+   * daemon's dependency graph to read a config type.
+   */
+  crawlberg?: {
+    allowPrivateNetwork?: boolean;
+    ignoreRobotsTxt?: boolean;
+    rateLimitMs?: number;
+    userAgent?: string;
+  };
 }
 
 type BackendFactory = (config: WebBackendConfig) => WebFetchBackend;
