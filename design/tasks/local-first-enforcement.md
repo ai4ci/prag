@@ -62,17 +62,46 @@ yet.
   `[options, cb]`, so it silently recorded nothing and the egress assertion
   passed vacuously.
 
-### Blocked, not done
+### 2026-11-03: the socket hook has a measured blind spot
 
-- **Report the active web backend in `GET /health` and `prag status`.**
-- **Test that a configured-but-unreachable web backend cannot fail a local
-  search or emit a request (ADR-024).**
+The claim above -- "the hook is at the socket layer ... because a native-addon
+telemetry call would bypass `fetch`" -- is **only half true**, and installing
+`@xberg-io/crawlberg` is what exposed it. The hook patches
+`net.Socket.prototype.connect` and `dns.lookup`, so it sees connections made
+through Node's `net` module. A native addon that carries its own HTTP stack
+does not use it. Measured against one loopback URL:
 
-Both need a web backend to exist. `task:web-fetch-backend-interface.md` has
-not started, and `/projects/watch` currently refuses any non-`file://` URI with
-`CRAWL_BACKEND_REQUIRED`. The egress test above is written so that adding a
-backend does not weaken it: it asserts on the local path, which must stay
-silent even once a backend is configured.
+| | `net.Socket.connect` calls observed |
+|---|---|
+| Node's own `fetch` | 1 |
+| `crawlberg.scrape` | **0** |
+
+So a green run of the zero-egress test is not evidence that a native addon
+stayed silent. It never was; there was simply no such addon in the tree making
+requests until now.
+
+**What was done about it.** A second, behavioural assertion:
+`the local path never calls the web backend` configures a counting backend and
+runs the same watch -> sync -> search cycle, asserting the backend is not
+invoked once. That is the property actually at stake, and unlike a socket
+count it is observable from JavaScript whatever the backend is written in.
+It also closes the second item below.
+
+**What is still not provable here.** A native addon's silence. Doing that
+properly needs an OS-level boundary -- a network namespace, seccomp, or an
+strace-based check -- which belongs to deployment verification rather than a
+unit test. Recorded so a green suite is not mistaken for a stronger guarantee
+than it gives.
+
+### Remaining
+
+- **Report the active web backend in `GET /health` and `prag status`.** The
+  backend is already in the `/health` payload (`daemon.ts`, `webBackend`:
+  id, endpoint, capabilities); what is missing is `prag status` printing it.
+- ~~**Test that a configured-but-unreachable web backend cannot fail a local
+  search or emit a request (ADR-024).**~~ Done, by the behavioural assertion
+  above: the backend is configured and never reached, so whether it is
+  reachable cannot affect a local search.
 
 Hardware acceleration beyond honouring the variable -- probing for CUDA,
 WebGPU or DirectML availability and choosing among them -- is not implemented.
