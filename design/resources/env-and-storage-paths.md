@@ -95,7 +95,7 @@ Every setting can be specified or overridden using environment variables prefixe
 | `PRAG_WORKER_POOL_SIZE` | `integer` | `1` | Parse/chunk/hash worker threads. Embedding and all database writes stay on the main thread regardless (ADR-021). |
 | `PRAG_MAX_FILE_BYTES` | `integer` | `2097152` | Files larger than this are skipped at discovery and counted as `tooLarge` in `prag status` (ADR-023). |
 | `PRAG_LOG_LEVEL` | `string` | `info` | Logging verbosity: `error`, `warn`, `info`, `debug`, `trace`. |
-| `PRAG_WEB_BACKEND` | `string` | `plain-fetcher` | Which `WebFetchBackend` performs web ingestion: `plain-fetcher`, `firecrawl`, or `exa` (ADR-024). No automatic fallback -- an unreachable or unknown id is a startup error. |
+| `PRAG_WEB_BACKEND` | `string` | _(unset)_ | Which `WebFetchBackend` performs web ingestion: `crawlberg`, `plain-fetcher`, `firecrawl`, or `exa` (ADR-024). Unset means no backend and every non-`file://` grant is refused, which keeps the install local-only. No automatic fallback -- an unreachable or unknown id is a startup error. |
 | `PRAG_FIRECRAWL_URL` | `string` | *(unset)* | Self-hosted Firecrawl endpoint. Unset **with** `firecrawl` selected requires `PRAG_FIRECRAWL_API_KEY`, so a typo cannot quietly move egress to the hosted API. |
 | `PRAG_EXA_API_KEY` | `string` | *(unset)* | Exa API key. Exa is an index, not a crawler: it declares `fetch` + `search` and glob grants against it fail with `CRAWL_CAPABILITY_UNAVAILABLE` (ADR-024). |
 
@@ -135,15 +135,28 @@ If present at `~/.config/prag/config.json`, the daemon loads defaults from this 
     "defaultSearchMode": "hybrid"
   },
   "web": {
-    "backend": "plain-fetcher",
+    "backend": "crawlberg",
+    "crawlberg": {
+      "allowPrivateNetwork": false,
+      "ignoreRobotsTxt": false,
+      "rateLimitMs": 200,
+      "userAgent": null
+    },
     "firecrawl": { "url": null, "apiKey": null },
     "exa": { "apiKey": null }
   }
 }
 ```
 
-`web.backend` selects exactly one ingestion backend (`plain-fetcher` | `firecrawl` |
+`web.backend` selects exactly one ingestion backend (`crawlberg` | `plain-fetcher` | `firecrawl` |
 `exa`); unknown or unreachable values fail at startup rather than falling back to
 another backend, since relocating egress silently is the failure ADR-024 exists to
 prevent. Credentials for a hosted backend are supplied here or by the env vars
 below; a hosted fetch backend never permits a hosted inference endpoint (ADR-006).
+
+`web.crawlberg` tunes the built-in crawler. `allowPrivateNetwork` is the one to
+be careful with: left `false`, a granted public URL cannot be used to reach
+loopback or RFC1918 addresses on the machine running the daemon, and the
+setting is pinned so that crawlberg's own `CRAWLBERG_ALLOW_PRIVATE_NETWORK`
+environment variable cannot override it. Only the test suite sets it `true`.
+`rateLimitMs` is the minimum delay between requests to one host.

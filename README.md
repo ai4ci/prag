@@ -124,7 +124,7 @@ npm run lint
 Design requirements not yet implemented:
 
 - [ ] LiteParse PDF/DOCX layout extraction; unsupported documents are refused by extension today.
-- [ ] Web ingestion: crawling a whole site. The backend interface, `plain-fetcher` and
+- [ ] Web ingestion: crawling a whole site. The backend interface, `crawlberg`, `plain-fetcher` and
       single-page fetch+index are done (ADR-024); `discover` needs the Firecrawl or Exa
       backend, both of which need credentials.
 - [ ] Hardware-acceleration provider selection and local-first enforcement check.
@@ -175,4 +175,4 @@ No separate process to launch: the MCP server runs inside the already-running (o
 
 ## 🔒 Security & Privacy
 
-`prag` is self-hosted and local by default. Telemetry, analytics, and usage reporting are omitted by design, unconditionally. Content that lives on your machine never leaves it: your code strings, structural graphs, document text, and vector floats are parsed, embedded and stored locally, and a local index-and-search cycle completes with the network unreachable. Outbound calls happen only for URIs you explicitly grant with `prag watch https://...`, through the web-fetch backend you selected (`plain-fetcher`, Firecrawl, or Exa — self-hosted or hosted), which `prag status` reports so the current egress path is always inspectable. Web fetching is the one part of prag that is not local-first, and it never involves a remote inference endpoint: embeddings stay local (see ADR-024, ADR-006).
+`prag` is self-hosted and local by default. Telemetry, analytics, and usage reporting are omitted by design, unconditionally. Content that lives on your machine never leaves it: your code strings, structural graphs, document text, and vector floats are parsed, embedded and stored locally, and a local index-and-search cycle completes with the network unreachable. Outbound calls happen only for URIs you explicitly grant with `prag watch https://...`, through the web-fetch backend you selected (`crawlberg`, `plain-fetcher`, Firecrawl, or Exa — self-hosted or hosted), which `prag status` reports so the current egress path is always inspectable. Web fetching is the one part of prag that is not local-first, and it never involves a remote inference endpoint: embeddings stay local (see ADR-024, ADR-006).

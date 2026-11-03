@@ -28,7 +28,9 @@ A backend implements a subset of three capabilities and declares which:
 | `discover` | Enumerate URLs under a granted prefix (site crawl or index query). |
 | `search` | Answer a query with URLs + content. Optional; not used by ingestion. |
 
-Built-ins: `firecrawl`, `exa`, `plain-fetcher` (`fetch` only, zero dependencies).
+Built-ins: `crawlberg` (`fetch` + `discover`, HTML->Markdown, the recommended
+choice), `firecrawl`, `exa`, and `plain-fetcher` (`fetch` only, zero
+dependencies, for an install that wants no native addon).
 Configuration selects exactly one ingestion backend via `web.backend`; each backend
 takes its own config block. See `resource:env-and-storage-paths.md`.
 
